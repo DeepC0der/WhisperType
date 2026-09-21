@@ -6,6 +6,7 @@ import { DictionaryView } from "@/components/views/DictionaryView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { OverlayView } from "@/components/views/OverlayView";
 import { Mic, History, BookA, Settings, ShieldCheck } from "lucide-react";
+import { useAppStore } from "@/store/useAppStore";
 
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
@@ -73,6 +74,31 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 };
 
 export const App: React.FC = () => {
+  React.useEffect(() => {
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      import("@tauri-apps/api/event")
+        .then(({ listen }) => {
+          const unlistenMic = listen<number>("mic-level", (event) => {
+            useAppStore.getState().setMicLevel(event.payload);
+          });
+          const unlistenState = listen<{
+            current_state: import("@/store/useAppStore").StateKind;
+            previous_state?: import("@/store/useAppStore").StateKind;
+            error_message?: string;
+          }>("state-changed", (event) => {
+            useAppStore
+              .getState()
+              .setAppState(event.payload.current_state, event.payload.error_message);
+          });
+          return () => {
+            unlistenMic.then((fn) => fn()).catch(() => {});
+            unlistenState.then((fn) => fn()).catch(() => {});
+          };
+        })
+        .catch(() => {});
+    }
+  }, []);
+
   return (
     <Router>
       <Routes>

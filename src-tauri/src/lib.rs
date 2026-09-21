@@ -1,15 +1,31 @@
+pub mod audio;
+pub mod logging;
 pub mod platform;
 pub mod state;
+pub mod storage;
 
-use platform::{Autostart, OverlayWindowExt, TextInjector};
+use audio::{enumerate_input_devices, resample_and_normalize, AudioCapture, AudioDeviceInfo};
+use platform::{Autostart, HotkeyBackend, OverlayWindowExt, TextInjector};
 use state::{AppState, AppStateManager, StateSnapshot};
-use tauri::{AppHandle, Manager, State};
+use storage::{
+    get_default_db_path, get_default_settings_path, AppSettings, Database, DictionaryRecord,
+    HistoryRecord, HotkeyMode, NewDictionaryEntry, SettingsManager,
+};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(target_os = "windows")]
-use platform::windows::{WindowsAutostart, WindowsTextInjector};
+use platform::windows::{
+    HotkeyActionCallback, HotkeyModeController, WindowsAutostart,
+    WindowsHotkeyBackend, WindowsTextInjector,
+};
 
 #[cfg(not(target_os = "windows"))]
 use platform::linux::{LinuxAutostart, LinuxTextInjector};
+
+// ==========================================
+// STATE IPC COMMANDS
+// ==========================================
 
 #[tauri::command]
 fn get_state(state: State<'_, AppStateManager>) -> AppState {
@@ -25,14 +41,22 @@ fn get_state_snapshot(state: State<'_, AppStateManager>) -> StateSnapshot {
 fn transition_state(
     next_state: AppState,
     state: State<'_, AppStateManager>,
+    app: AppHandle,
 ) -> Result<AppState, String> {
-    state.transition_to(next_state)
+    let result = state.transition_to(next_state)?;
+    let _ = app.emit("state-changed", state.get_snapshot());
+    Ok(result)
 }
 
 #[tauri::command]
-fn reset_state(state: State<'_, AppStateManager>) {
+fn reset_state(state: State<'_, AppStateManager>, app: AppHandle) {
     state.reset_to_idle();
+    let _ = app.emit("state-changed", state.get_snapshot());
 }
+
+// ==========================================
+// WINDOW & INJECTION IPC COMMANDS
+// ==========================================
 
 #[tauri::command]
 fn apply_overlay_styles(app: AppHandle) -> Result<(), String> {
@@ -88,10 +112,336 @@ fn set_autostart_enabled(enabled: bool) -> Result<(), String> {
     }
 }
 
+// ==========================================
+// AUDIO IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+    enumerate_input_devices().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct AudioCaptureSummary {
+    pub sample_count: usize,
+    pub duration_seconds: f32,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[tauri::command]
+fn start_audio_capture(
+    device_name: Option<String>,
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    cap.start_recording(device_name.as_deref(), Some(app))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn stop_audio_capture(
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+) -> Result<AudioCaptureSummary, String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    let captured = cap.stop_recording().map_err(|e| e.to_string())?;
+    let duration_seconds = (captured.samples.len() as f32)
+        / (captured.sample_rate as f32 * captured.channels.max(1) as f32);
+
+    // Resample and normalize to 16,000 Hz mono PCM
+    let resampled = resample_and_normalize(
+        &captured.samples,
+        captured.sample_rate,
+        captured.channels,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(AudioCaptureSummary {
+        sample_count: resampled.len(),
+        duration_seconds,
+        sample_rate: 16000,
+        channels: 1,
+    })
+}
+
+#[tauri::command]
+fn cancel_audio_capture(
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+) -> Result<(), String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    cap.cancel_recording();
+    Ok(())
+}
+
+// ==========================================
+// SETTINGS IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_settings(settings: State<'_, SettingsManager>) -> Result<AppSettings, String> {
+    Ok(settings.get())
+}
+
+#[tauri::command]
+fn update_settings(
+    new_settings: AppSettings,
+    settings: State<'_, SettingsManager>,
+    hotkey_service: State<'_, HotkeyService>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let old_settings = settings.get();
+    let settings_path = get_default_settings_path();
+
+    settings
+        .update_and_save(&settings_path, new_settings.clone())
+        .map_err(|e| e.to_string())?;
+
+    // Update autostart if changed
+    if old_settings.launch_on_startup != new_settings.launch_on_startup {
+        let _ = set_autostart_enabled(new_settings.launch_on_startup);
+    }
+
+    // Rebind hotkey if combo or mode changed
+    if old_settings.hotkey != new_settings.hotkey
+        || old_settings.hotkey_mode != new_settings.hotkey_mode
+    {
+        hotkey_service.rebind(
+            &app,
+            &old_settings.hotkey,
+            &new_settings.hotkey,
+            new_settings.hotkey_mode,
+        )?;
+    }
+
+    Ok(())
+}
+
+// ==========================================
+// HISTORY IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_history(
+    limit: Option<usize>,
+    offset: Option<usize>,
+    db: State<'_, Database>,
+) -> Result<Vec<HistoryRecord>, String> {
+    db.get_history(limit, offset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_history(id: String, db: State<'_, Database>) -> Result<bool, String> {
+    db.delete_history(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_history(db: State<'_, Database>) -> Result<usize, String> {
+    db.clear_history().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn export_history(db: State<'_, Database>) -> Result<String, String> {
+    db.export_history_json().map_err(|e| e.to_string())
+}
+
+// ==========================================
+// DICTIONARY IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_dictionary(db: State<'_, Database>) -> Result<Vec<DictionaryRecord>, String> {
+    db.get_dictionary().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_dictionary_entry(
+    entry: NewDictionaryEntry,
+    db: State<'_, Database>,
+) -> Result<DictionaryRecord, String> {
+    db.insert_dictionary(entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_dictionary_entry(
+    entry: DictionaryRecord,
+    db: State<'_, Database>,
+) -> Result<bool, String> {
+    db.update_dictionary(entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_dictionary_entry(id: String, db: State<'_, Database>) -> Result<bool, String> {
+    db.delete_dictionary(&id).map_err(|e| e.to_string())
+}
+
+// ==========================================
+// DIAGNOSTICS IPC COMMAND
+// ==========================================
+
+#[tauri::command]
+fn copy_diagnostics(settings: State<'_, SettingsManager>) -> Result<String, String> {
+    let report = logging::generate_diagnostics_report(&settings.get(), &logging::get_default_log_dir());
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        let _ = clipboard.set_text(&report);
+    }
+    Ok(report)
+}
+
+// ==========================================
+// HOTKEY SERVICE
+// ==========================================
+
+pub struct HotkeyService {
+    #[cfg(target_os = "windows")]
+    backend: Arc<Mutex<WindowsHotkeyBackend>>,
+    #[cfg(target_os = "windows")]
+    mode_controller: Arc<Mutex<HotkeyModeController>>,
+}
+
+#[cfg(target_os = "windows")]
+fn create_hotkey_action_callback(
+    app: AppHandle,
+    mode_controller: Arc<Mutex<HotkeyModeController>>,
+) -> HotkeyActionCallback {
+    Arc::new(move |action| {
+        let sm = app.state::<AppStateManager>();
+        let current = sm.get_state();
+        let next_opt = {
+            let mc = mode_controller.lock().unwrap();
+            mc.handle_action(action, current)
+        };
+
+        if let Some(next) = next_opt {
+            if sm.transition_to(next).is_ok() {
+                let _ = app.emit("state-changed", sm.get_snapshot());
+                let capture_arc = app.state::<Arc<Mutex<AudioCapture>>>();
+                match next {
+                    AppState::RECORDING => {
+                        let settings = app.state::<SettingsManager>().get();
+                        let mut cap = capture_arc.lock().unwrap();
+                        if let Err(e) = cap.start_recording(
+                            settings.audio_device.as_deref(),
+                            Some(app.clone()),
+                        ) {
+                            log::error!("Microphone start error: {e}");
+                            sm.set_error(e.to_string());
+                            let _ = app.emit("state-changed", sm.get_snapshot());
+                        } else if let Some(w) = app.get_webview_window("overlay") {
+                            let _ = w.show();
+                        }
+                    }
+                    AppState::TRANSCRIBING => {
+                        let mut cap = capture_arc.lock().unwrap();
+                        if let Err(e) = cap.stop_recording() {
+                            log::error!("Microphone stop error: {e}");
+                            sm.set_error(e.to_string());
+                            let _ = app.emit("state-changed", sm.get_snapshot());
+                        }
+                    }
+                    AppState::IDLE => {
+                        let mut cap = capture_arc.lock().unwrap();
+                        cap.cancel_recording();
+                        if let Some(w) = app.get_webview_window("overlay") {
+                            let _ = w.hide();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    })
+}
+
+impl HotkeyService {
+    pub fn new(app_handle: &AppHandle, initial_hotkey: &str, initial_mode: HotkeyMode) -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            let mut backend = WindowsHotkeyBackend::new();
+            let mode_controller = Arc::new(Mutex::new(HotkeyModeController::new(initial_mode)));
+            let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&mode_controller));
+
+            if let Err(e) = backend.register_hotkey_action(initial_hotkey, action_cb) {
+                log::error!("Failed to register initial hotkey '{initial_hotkey}': {e}");
+            }
+            if let Err(e) = backend.start_listening() {
+                log::error!("Failed to start hotkey listener thread: {e}");
+            }
+
+            Self {
+                backend: Arc::new(Mutex::new(backend)),
+                mode_controller,
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (app_handle, initial_hotkey, initial_mode);
+            Self {}
+        }
+    }
+
+    pub fn rebind(
+        &self,
+        app_handle: &AppHandle,
+        old_hotkey: &str,
+        new_hotkey: &str,
+        new_mode: HotkeyMode,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut backend = self.backend.lock().map_err(|_| "Backend lock poisoned")?;
+            self.mode_controller
+                .lock()
+                .map_err(|_| "Controller lock poisoned")?
+                .set_mode(new_mode);
+
+            let _ = backend.unregister_hotkey(old_hotkey);
+            let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&self.mode_controller));
+
+            backend
+                .register_hotkey_action(new_hotkey, action_cb)
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (app_handle, old_hotkey, new_hotkey, new_mode);
+        }
+        Ok(())
+    }
+}
+
+// ==========================================
+// APPLICATION LIFECYCLE & RUN ENTRYPOINT
+// ==========================================
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // 1. Initialize logging
+    let log_dir = logging::get_default_log_dir();
+    let _log_guard = logging::init_logging(&log_dir).ok();
+
+    // 2. Initialize settings
+    let settings_path = get_default_settings_path();
+    let settings_manager = SettingsManager::load_from_file(&settings_path).unwrap_or_else(|e| {
+        log::error!("Failed to load settings from file: {e}. Using defaults.");
+        SettingsManager::default()
+    });
+
+    // 3. Initialize SQLite database
+    let db_path = get_default_db_path();
+    let database = Database::open(&db_path).unwrap_or_else(|e| {
+        log::error!("Failed to open history.db: {e}. Falling back to in-memory db.");
+        Database::in_memory().expect("In-memory DB fallback failed")
+    });
+
+    // 4. Audio capture buffer (allocated only during active recording)
+    let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
+
     tauri::Builder::default()
         .manage(AppStateManager::new())
+        .manage(database)
+        .manage(settings_manager.clone())
+        .manage(audio_capture)
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_state_snapshot,
@@ -100,15 +450,40 @@ pub fn run() {
             apply_overlay_styles,
             inject_text,
             is_autostart_enabled,
-            set_autostart_enabled
+            set_autostart_enabled,
+            get_audio_devices,
+            start_audio_capture,
+            stop_audio_capture,
+            cancel_audio_capture,
+            get_settings,
+            update_settings,
+            get_history,
+            delete_history,
+            clear_history,
+            export_history,
+            get_dictionary,
+            add_dictionary_entry,
+            update_dictionary_entry,
+            delete_dictionary_entry,
+            copy_diagnostics,
         ])
-        .setup(|app| {
+        .setup(move |app| {
             // Apply overlay styles to overlay window if it exists at startup
             if let Some(overlay_window) = app.get_webview_window("overlay") {
                 if let Err(e) = overlay_window.apply_overlay_styles() {
                     log::warn!("Could not apply overlay styles on startup: {e}");
                 }
             }
+
+            // Initialize HotkeyService wired to AppState and AudioCapture
+            let current_settings = settings_manager.get();
+            let hotkey_service = HotkeyService::new(
+                &app.handle().clone(),
+                &current_settings.hotkey,
+                current_settings.hotkey_mode,
+            );
+            app.manage(hotkey_service);
+
             Ok(())
         })
         .run(tauri::generate_context!())

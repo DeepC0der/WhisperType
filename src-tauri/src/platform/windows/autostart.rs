@@ -157,19 +157,19 @@ mod tests {
         let fake_exe = r"C:\Program Files\Murmur\murmur.exe";
 
         // 1. Initial query should be false
-        assert_eq!(autostart.is_enabled(app_name).unwrap(), false);
+        assert!(!autostart.is_enabled(app_name).unwrap());
 
         // 2. Enable autostart
         assert!(autostart.enable(app_name, fake_exe).is_ok());
 
         // 3. Query should be true
-        assert_eq!(autostart.is_enabled(app_name).unwrap(), true);
+        assert!(autostart.is_enabled(app_name).unwrap());
 
         // 4. Disable autostart
         assert!(autostart.disable(app_name).is_ok());
 
         // 5. Query should be false again
-        assert_eq!(autostart.is_enabled(app_name).unwrap(), false);
+        assert!(!autostart.is_enabled(app_name).unwrap());
 
         // 6. Idempotent disable
         assert!(autostart.disable(app_name).is_ok());

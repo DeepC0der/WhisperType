@@ -11,13 +11,14 @@ use windows::Win32::System::StationsAndDesktops::{
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_F1, VK_F12, VK_LWIN, VK_MENU,
-    VK_RETURN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
+    GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_ESCAPE, VK_F1, VK_F12, VK_LCONTROL, VK_LMENU,
+    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RETURN, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT,
+    VK_SPACE, VK_TAB,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, PostThreadMessageW,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, KBDLLHOOKSTRUCT, MSG, PM_NOREMOVE,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_QUIT, WM_SYSKEYDOWN,
+    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 /// Modifier key bitmask flags for hotkey detection.
@@ -172,10 +173,26 @@ fn set_primary_vk(slot: &mut Option<u16>, vk: u16, combo: &str) -> Result<(), Pl
     Ok(())
 }
 
+use crate::state::AppState;
+use crate::storage::HotkeyMode;
+use std::time::{Duration, Instant};
+
+/// Action event dispatched from keyboard hook.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyAction {
+    Press,
+    Release,
+    Cancel,
+}
+
+pub type HotkeyActionCallback = Arc<dyn Fn(HotkeyAction) + Send + Sync + 'static>;
+
 #[derive(Clone)]
 struct HotkeyEntry {
     parsed: ParsedHotkey,
-    callback: HotkeyCallback,
+    callback: Option<HotkeyCallback>,
+    action_callback: Option<HotkeyActionCallback>,
+    is_pressed: Arc<AtomicBool>,
 }
 
 static GLOBAL_REGISTRY: Mutex<Option<HashMap<String, HotkeyEntry>>> = Mutex::new(None);
@@ -192,6 +209,32 @@ unsafe fn attach_thread_to_input_desktop() -> Option<HDESK> {
     None
 }
 
+/// Check if a released virtual key corresponds to the hotkey's primary trigger key or any of its active modifiers.
+pub fn is_hotkey_release(parsed: &ParsedHotkey, vk: u16) -> bool {
+    if parsed.vk == vk {
+        return true;
+    }
+    if parsed.modifiers.ctrl
+        && (vk == VK_CONTROL.0 || vk == VK_LCONTROL.0 || vk == VK_RCONTROL.0)
+    {
+        return true;
+    }
+    if parsed.modifiers.shift
+        && (vk == VK_SHIFT.0 || vk == VK_LSHIFT.0 || vk == VK_RSHIFT.0)
+    {
+        return true;
+    }
+    if parsed.modifiers.alt
+        && (vk == VK_MENU.0 || vk == VK_LMENU.0 || vk == VK_RMENU.0)
+    {
+        return true;
+    }
+    if parsed.modifiers.win && (vk == VK_LWIN.0 || vk == VK_RWIN.0) {
+        return true;
+    }
+    false
+}
+
 unsafe extern "system" fn low_level_keyboard_proc(
     code: i32,
     wparam: WPARAM,
@@ -199,32 +242,75 @@ unsafe extern "system" fn low_level_keyboard_proc(
 ) -> LRESULT {
     if code >= 0 {
         let msg = wparam.0 as u32;
+        let kbd = *(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let vk = kbd.vkCode as u16;
+
         if msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN {
-            let kbd = *(lparam.0 as *const KBDLLHOOKSTRUCT);
-            let vk = kbd.vkCode as u16;
+            if vk == VK_ESCAPE.0 {
+                // Global Esc key pressed -> cancel active recording if any and reset pressed states
+                if let Ok(guard) = GLOBAL_REGISTRY.lock() {
+                    if let Some(map) = guard.as_ref() {
+                        for entry in map.values() {
+                            entry.is_pressed.store(false, Ordering::SeqCst);
+                            if let Some(ref acb) = entry.action_callback {
+                                let cb_clone = Arc::clone(acb);
+                                std::thread::spawn(move || {
+                                    cb_clone(HotkeyAction::Cancel);
+                                });
+                            }
+                        }
+                    }
+                }
+            } else {
+                let ctrl = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
+                let shift = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+                let alt = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
+                let win = ((GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0)
+                    || ((GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0);
 
-            let ctrl = (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0;
-            let shift = (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
-            let alt = (GetAsyncKeyState(VK_MENU.0 as i32) as u16 & 0x8000) != 0;
-            let win = ((GetAsyncKeyState(VK_LWIN.0 as i32) as u16 & 0x8000) != 0)
-                || ((GetAsyncKeyState(VK_RWIN.0 as i32) as u16 & 0x8000) != 0);
+                let current_mods = HotkeyModifiers {
+                    ctrl,
+                    alt,
+                    shift,
+                    win,
+                };
 
-            let current_mods = HotkeyModifiers {
-                ctrl,
-                alt,
-                shift,
-                win,
-            };
-
+                if let Ok(guard) = GLOBAL_REGISTRY.lock() {
+                    if let Some(map) = guard.as_ref() {
+                        for entry in map.values() {
+                            if entry.parsed.matches(vk, current_mods) {
+                                // Prevent typematic auto-repeat multiple firings
+                                if !entry.is_pressed.swap(true, Ordering::SeqCst) {
+                                    let legacy_cb = entry.callback.clone();
+                                    let action_cb = entry.action_callback.clone();
+                                    std::thread::spawn(move || {
+                                        if let Some(lcb) = legacy_cb {
+                                            lcb();
+                                        }
+                                        if let Some(acb) = action_cb {
+                                            acb(HotkeyAction::Press);
+                                        }
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if msg == WM_KEYUP || msg == WM_SYSKEYUP {
             if let Ok(guard) = GLOBAL_REGISTRY.lock() {
                 if let Some(map) = guard.as_ref() {
                     for entry in map.values() {
-                        if entry.parsed.matches(vk, current_mods) {
-                            let cb_clone = Arc::clone(&entry.callback);
-                            // Run callback in separate worker thread to return immediately (< 1ms)
-                            std::thread::spawn(move || {
-                                cb_clone();
-                            });
+                        // Release when either the primary key or any of the combo's modifier keys is released
+                        if is_hotkey_release(&entry.parsed, vk)
+                            && entry.is_pressed.swap(false, Ordering::SeqCst)
+                        {
+                            if let Some(ref acb) = entry.action_callback {
+                                let cb_clone = Arc::clone(acb);
+                                std::thread::spawn(move || {
+                                    cb_clone(HotkeyAction::Release);
+                                });
+                            }
                         }
                     }
                 }
@@ -253,6 +339,26 @@ impl WindowsHotkeyBackend {
             *guard = Some(self.registered_combos.clone());
         }
     }
+
+    /// Register a hotkey with an action callback handling Press, Release, and Cancel events.
+    pub fn register_hotkey_action(
+        &mut self,
+        combo: &str,
+        callback: HotkeyActionCallback,
+    ) -> Result<(), PlatformError> {
+        let parsed = parse_hotkey_string(combo)?;
+        self.registered_combos.insert(
+            combo.to_string(),
+            HotkeyEntry {
+                parsed,
+                callback: None,
+                action_callback: Some(callback),
+                is_pressed: Arc::new(AtomicBool::new(false)),
+            },
+        );
+        self.sync_registry();
+        Ok(())
+    }
 }
 
 impl Default for WindowsHotkeyBackend {
@@ -272,7 +378,9 @@ impl HotkeyBackend for WindowsHotkeyBackend {
             combo.to_string(),
             HotkeyEntry {
                 parsed,
-                callback,
+                callback: Some(callback),
+                action_callback: None,
+                is_pressed: Arc::new(AtomicBool::new(false)),
             },
         );
         self.sync_registry();
@@ -390,6 +498,108 @@ impl Drop for WindowsHotkeyBackend {
     }
 }
 
+/// Controller mapping hotkey actions (Press, Release, Cancel) to AppState transitions
+/// according to the configured HotkeyMode (HoldToTalk, Toggle, Hybrid).
+#[derive(Debug)]
+pub struct HotkeyModeController {
+    mode: HotkeyMode,
+    press_time: Mutex<Option<Instant>>,
+}
+
+impl HotkeyModeController {
+    pub fn new(mode: HotkeyMode) -> Self {
+        Self {
+            mode,
+            press_time: Mutex::new(None),
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: HotkeyMode) {
+        self.mode = mode;
+        *self.press_time.lock().unwrap() = None;
+    }
+
+    pub fn get_mode(&self) -> HotkeyMode {
+        self.mode
+    }
+
+    /// Process a hotkey action against the current application state.
+    /// Returns Some(next_state) if a valid state transition should occur, or None if no transition is needed.
+    pub fn handle_action(&self, action: HotkeyAction, current_state: AppState) -> Option<AppState> {
+        match action {
+            HotkeyAction::Cancel => {
+                // Esc key pressed: cancel recording cleanly and reset to IDLE
+                *self.press_time.lock().unwrap() = None;
+                if current_state == AppState::RECORDING {
+                    Some(AppState::IDLE)
+                } else {
+                    None
+                }
+            }
+            HotkeyAction::Press => match self.mode {
+                HotkeyMode::HoldToTalk => {
+                    if current_state == AppState::IDLE {
+                        Some(AppState::RECORDING)
+                    } else {
+                        None
+                    }
+                }
+                HotkeyMode::Toggle => {
+                    if current_state == AppState::IDLE {
+                        Some(AppState::RECORDING)
+                    } else if current_state == AppState::RECORDING {
+                        Some(AppState::TRANSCRIBING)
+                    } else {
+                        None
+                    }
+                }
+                HotkeyMode::Hybrid => {
+                    if current_state == AppState::IDLE {
+                        *self.press_time.lock().unwrap() = Some(Instant::now());
+                        Some(AppState::RECORDING)
+                    } else if current_state == AppState::RECORDING {
+                        // User pressed again while recording -> toggle off
+                        *self.press_time.lock().unwrap() = None;
+                        Some(AppState::TRANSCRIBING)
+                    } else {
+                        None
+                    }
+                }
+            },
+            HotkeyAction::Release => match self.mode {
+                HotkeyMode::HoldToTalk => {
+                    if current_state == AppState::RECORDING {
+                        Some(AppState::TRANSCRIBING)
+                    } else {
+                        None
+                    }
+                }
+                HotkeyMode::Toggle => {
+                    // Key release is ignored in Toggle mode
+                    None
+                }
+                HotkeyMode::Hybrid => {
+                    if let Some(press_start) = self.press_time.lock().unwrap().take() {
+                        if press_start.elapsed() >= Duration::from_millis(300) {
+                            // Key was held for >= 300ms -> treat as hold-to-talk release!
+                            if current_state == AppState::RECORDING {
+                                Some(AppState::TRANSCRIBING)
+                            } else {
+                                None
+                            }
+                        } else {
+                            // Key was tapped quickly (< 300ms) -> keep recording running in toggle mode
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                }
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,15 +608,15 @@ mod tests {
     #[test]
     fn test_parse_valid_hotkeys() {
         let p1 = parse_hotkey_string("Ctrl+Shift+Space").unwrap();
-        assert_eq!(p1.modifiers.ctrl, true);
-        assert_eq!(p1.modifiers.shift, true);
-        assert_eq!(p1.modifiers.alt, false);
-        assert_eq!(p1.modifiers.win, false);
+        assert!(p1.modifiers.ctrl);
+        assert!(p1.modifiers.shift);
+        assert!(!p1.modifiers.alt);
+        assert!(!p1.modifiers.win);
         assert_eq!(p1.vk, VK_SPACE.0);
 
         let p2 = parse_hotkey_string("Alt+Space").unwrap();
-        assert_eq!(p2.modifiers.alt, true);
-        assert_eq!(p2.modifiers.ctrl, false);
+        assert!(p2.modifiers.alt);
+        assert!(!p2.modifiers.ctrl);
         assert_eq!(p2.vk, VK_SPACE.0);
 
         let p3 = parse_hotkey_string("F8").unwrap();
@@ -414,8 +624,8 @@ mod tests {
         assert_eq!(p3.vk, VK_F1.0 + 7);
 
         let p4 = parse_hotkey_string("Win+Ctrl+A").unwrap();
-        assert_eq!(p4.modifiers.win, true);
-        assert_eq!(p4.modifiers.ctrl, true);
+        assert!(p4.modifiers.win);
+        assert!(p4.modifiers.ctrl);
         assert_eq!(p4.vk, 0x41);
     }
 
@@ -491,5 +701,161 @@ mod tests {
         // Unregister
         assert!(backend.unregister_hotkey("Ctrl+Shift+Space").is_ok());
         assert_eq!(backend.registered_combos.len(), 0);
+    }
+
+    #[test]
+    fn test_backend_action_registration() {
+        let mut backend = WindowsHotkeyBackend::new();
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        let action_cb: HotkeyActionCallback = {
+            let c = Arc::clone(&counter);
+            Arc::new(move |_act| {
+                c.fetch_add(1, Ordering::SeqCst);
+            })
+        };
+
+        assert!(backend
+            .register_hotkey_action("Ctrl+Shift+Space", action_cb)
+            .is_ok());
+        assert_eq!(backend.registered_combos.len(), 1);
+
+        assert!(backend.unregister_hotkey("Ctrl+Shift+Space").is_ok());
+        assert_eq!(backend.registered_combos.len(), 0);
+    }
+
+    #[test]
+    fn test_hotkey_mode_hold_to_talk() {
+        let ctrl = HotkeyModeController::new(HotkeyMode::HoldToTalk);
+
+        // Press from IDLE -> RECORDING
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::IDLE),
+            Some(AppState::RECORDING)
+        );
+
+        // Repeated press (auto-repeat) while RECORDING -> None
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::RECORDING),
+            None
+        );
+
+        // Release from RECORDING -> TRANSCRIBING
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Release, AppState::RECORDING),
+            Some(AppState::TRANSCRIBING)
+        );
+
+        // Release from IDLE -> None
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Release, AppState::IDLE),
+            None
+        );
+    }
+
+    #[test]
+    fn test_hotkey_mode_toggle() {
+        let ctrl = HotkeyModeController::new(HotkeyMode::Toggle);
+
+        // First press -> RECORDING
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::IDLE),
+            Some(AppState::RECORDING)
+        );
+
+        // Release in toggle mode is ignored
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Release, AppState::RECORDING),
+            None
+        );
+
+        // Second press -> TRANSCRIBING
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::RECORDING),
+            Some(AppState::TRANSCRIBING)
+        );
+    }
+
+    #[test]
+    fn test_hotkey_mode_hybrid_tap_and_hold() {
+        let ctrl = HotkeyModeController::new(HotkeyMode::Hybrid);
+
+        // Case A: Short Tap (< 300ms)
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::IDLE),
+            Some(AppState::RECORDING)
+        );
+        // Instant release -> should remain in RECORDING (toggle mode activated)
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Release, AppState::RECORDING),
+            None
+        );
+        // Second press stops it
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::RECORDING),
+            Some(AppState::TRANSCRIBING)
+        );
+
+        // Case B: Long Hold (>= 300ms)
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Press, AppState::IDLE),
+            Some(AppState::RECORDING)
+        );
+        // Simulate holding for 350ms by modifying the stored instant
+        {
+            let mut guard = ctrl.press_time.lock().unwrap();
+            *guard = Some(Instant::now() - Duration::from_millis(350));
+        }
+        // Release after hold -> should stop recording and transition to TRANSCRIBING
+        assert_eq!(
+            ctrl.handle_action(HotkeyAction::Release, AppState::RECORDING),
+            Some(AppState::TRANSCRIBING)
+        );
+    }
+
+    #[test]
+    fn test_hotkey_esc_cancel() {
+        let modes = [HotkeyMode::HoldToTalk, HotkeyMode::Toggle, HotkeyMode::Hybrid];
+        for mode in modes {
+            let ctrl = HotkeyModeController::new(mode);
+
+            // Cancel during RECORDING resets to IDLE
+            assert_eq!(
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::RECORDING),
+                Some(AppState::IDLE)
+            );
+
+            // Cancel when not RECORDING does nothing
+            assert_eq!(
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::IDLE),
+                None
+            );
+            assert_eq!(
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::TRANSCRIBING),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_hotkey_release() {
+        let hotkey = parse_hotkey_string("Ctrl+Shift+Space").unwrap();
+
+        // Primary key release triggers release
+        assert!(is_hotkey_release(&hotkey, VK_SPACE.0));
+
+        // Modifier release triggers release (either generic or left/right)
+        assert!(is_hotkey_release(&hotkey, VK_CONTROL.0));
+        assert!(is_hotkey_release(&hotkey, VK_LCONTROL.0));
+        assert!(is_hotkey_release(&hotkey, VK_RCONTROL.0));
+        assert!(is_hotkey_release(&hotkey, VK_SHIFT.0));
+        assert!(is_hotkey_release(&hotkey, VK_LSHIFT.0));
+        assert!(is_hotkey_release(&hotkey, VK_RSHIFT.0));
+
+        // Unrelated modifier or key does NOT trigger release
+        assert!(!is_hotkey_release(&hotkey, VK_MENU.0));
+        assert!(!is_hotkey_release(&hotkey, VK_LMENU.0));
+        assert!(!is_hotkey_release(&hotkey, VK_LWIN.0));
+        assert!(!is_hotkey_release(&hotkey, VK_RETURN.0));
     }
 }
