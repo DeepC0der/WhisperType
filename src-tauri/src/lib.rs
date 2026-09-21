@@ -1,15 +1,18 @@
+pub mod asr;
 pub mod audio;
+pub mod commands;
 pub mod logging;
 pub mod platform;
 pub mod state;
 pub mod storage;
 
+use asr::{AsrEngine, PostProcessConfig};
 use audio::{enumerate_input_devices, resample_and_normalize, AudioCapture, AudioDeviceInfo};
 use platform::{Autostart, HotkeyBackend, OverlayWindowExt, TextInjector};
 use state::{AppState, AppStateManager, StateSnapshot};
 use storage::{
     get_default_db_path, get_default_settings_path, AppSettings, Database, DictionaryRecord,
-    HistoryRecord, HotkeyMode, NewDictionaryEntry, SettingsManager,
+    HistoryRecord, HotkeyMode, InsertionMode, NewDictionaryEntry, NewHistoryRecord, SettingsManager,
 };
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -178,6 +181,8 @@ fn cancel_audio_capture(
 // SETTINGS IPC COMMANDS
 // ==========================================
 
+use commands::asr::{benchmark_model, get_model_status, load_model, transcribe_audio_buffer};
+
 #[tauri::command]
 fn get_settings(settings: State<'_, SettingsManager>) -> Result<AppSettings, String> {
     Ok(settings.get())
@@ -188,6 +193,7 @@ fn update_settings(
     new_settings: AppSettings,
     settings: State<'_, SettingsManager>,
     hotkey_service: State<'_, HotkeyService>,
+    asr_engine: State<'_, AsrEngine>,
     app: AppHandle,
 ) -> Result<(), String> {
     let old_settings = settings.get();
@@ -196,6 +202,9 @@ fn update_settings(
     settings
         .update_and_save(&settings_path, new_settings.clone())
         .map_err(|e| e.to_string())?;
+
+    let _ = asr_engine.set_requested_provider(&new_settings.performance_provider);
+    asr_engine.set_idle_unload_minutes(new_settings.idle_unload_minutes);
 
     // Update autostart if changed
     if old_settings.launch_on_startup != new_settings.launch_on_startup {
@@ -333,10 +342,103 @@ fn create_hotkey_action_callback(
                     }
                     AppState::TRANSCRIBING => {
                         let mut cap = capture_arc.lock().unwrap();
-                        if let Err(e) = cap.stop_recording() {
-                            log::error!("Microphone stop error: {e}");
-                            sm.set_error(e.to_string());
-                            let _ = app.emit("state-changed", sm.get_snapshot());
+                        match cap.stop_recording() {
+                            Ok(captured) => {
+                                let app_clone = app.clone();
+                                std::thread::Builder::new()
+                                    .name("murmur-transcriber".to_string())
+                                    .spawn(move || {
+                                        let sm = app_clone.state::<AppStateManager>();
+                                        let engine = app_clone.state::<AsrEngine>();
+                                        let settings = app_clone.state::<SettingsManager>().get();
+                                        let db = app_clone.state::<Database>();
+
+                                        // Resample to 16kHz mono PCM
+                                        let pcm = match resample_and_normalize(
+                                            &captured.samples,
+                                            captured.sample_rate,
+                                            captured.channels,
+                                        ) {
+                                            Ok(p) => p,
+                                            Err(e) => {
+                                                log::error!("Resampling error: {e}");
+                                                sm.set_error(e.to_string());
+                                                let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                    let _ = w.hide();
+                                                }
+                                                return;
+                                            }
+                                        };
+
+                                        let post_cfg = PostProcessConfig::from(&settings);
+                                        let dict = db.get_dictionary().unwrap_or_default();
+
+                                        match engine.transcribe_samples(&pcm, &post_cfg, &dict) {
+                                            Ok(result) => {
+                                                if result.discarded_silent || result.final_text.is_empty() {
+                                                    sm.reset_to_idle();
+                                                    let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                    if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                        let _ = w.hide();
+                                                    }
+                                                } else {
+                                                    let _ = db.insert_history(
+                                                        NewHistoryRecord {
+                                                            raw_text: result.raw_text.clone(),
+                                                            final_text: result.final_text.clone(),
+                                                            duration_ms: result.duration_ms,
+                                                            language: Some("en".to_string()),
+                                                            model_variant: Some(settings.model_variant),
+                                                            provider: Some(result.provider.clone()),
+                                                            inference_ms: Some(result.inference_ms),
+                                                        },
+                                                        settings.history_retention_max,
+                                                    );
+
+                                                    let _ = app_clone.emit("transcript-ready", &result.final_text);
+
+                                                    if settings.auto_insert {
+                                                        if sm.transition_to(AppState::INSERTING).is_ok() {
+                                                            let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                        }
+                                                        if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                            let _ = w.hide();
+                                                        }
+
+                                                        let inject_mode = match settings.insertion_mode {
+                                                            InsertionMode::UnicodeTyping => Some("unicode".to_string()),
+                                                            InsertionMode::PasteWithRestore => None,
+                                                        };
+                                                        let _ = inject_text(result.final_text, inject_mode);
+                                                        sm.reset_to_idle();
+                                                        let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                    } else {
+                                                        sm.reset_to_idle();
+                                                        let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                        if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                            let _ = w.hide();
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                log::error!("Transcription error: {e}");
+                                                sm.set_error(e.to_string());
+                                                let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                    let _ = w.hide();
+                                                }
+                                            }
+                                        }
+                                    })
+                                    .expect("Failed to spawn transcriber thread");
+                            }
+                            Err(e) => {
+                                log::error!("Microphone stop error: {e}");
+                                sm.set_error(e.to_string());
+                                let _ = app.emit("state-changed", sm.get_snapshot());
+                            }
                         }
                     }
                     AppState::IDLE => {
@@ -437,11 +539,20 @@ pub fn run() {
     // 4. Audio capture buffer (allocated only during active recording)
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
 
+    // 5. Initialize ASR engine and spawn background loading
+    let initial_settings = settings_manager.get();
+    let asr_engine = AsrEngine::new(
+        &initial_settings.performance_provider,
+        initial_settings.idle_unload_minutes,
+    );
+    asr_engine.spawn_background_load();
+
     tauri::Builder::default()
         .manage(AppStateManager::new())
         .manage(database)
         .manage(settings_manager.clone())
         .manage(audio_capture)
+        .manage(asr_engine)
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_state_snapshot,
@@ -466,6 +577,10 @@ pub fn run() {
             update_dictionary_entry,
             delete_dictionary_entry,
             copy_diagnostics,
+            get_model_status,
+            load_model,
+            transcribe_audio_buffer,
+            benchmark_model,
         ])
         .setup(move |app| {
             // Apply overlay styles to overlay window if it exists at startup

@@ -103,6 +103,27 @@ pub struct AppSettings {
 
     #[serde(default = "default_overlay_position")]
     pub overlay_position: String,
+
+    #[serde(default = "default_true")]
+    pub trim_whitespace: bool,
+
+    #[serde(default = "default_true")]
+    pub preserve_punctuation: bool,
+
+    #[serde(default = "default_true")]
+    pub remove_fillers: bool,
+
+    #[serde(default = "default_true")]
+    pub apply_spoken_commands: bool,
+
+    #[serde(default = "default_true")]
+    pub apply_dictionary: bool,
+
+    #[serde(default)]
+    pub add_trailing_space: bool,
+
+    #[serde(default)]
+    pub idle_unload_minutes: u32,
 }
 
 impl Default for AppSettings {
@@ -120,6 +141,13 @@ impl Default for AppSettings {
             model_variant: default_model_variant(),
             sound_effects_enabled: false,
             overlay_position: default_overlay_position(),
+            trim_whitespace: true,
+            preserve_punctuation: true,
+            remove_fillers: true,
+            apply_spoken_commands: true,
+            apply_dictionary: true,
+            add_trailing_space: false,
+            idle_unload_minutes: 0,
         }
     }
 }
