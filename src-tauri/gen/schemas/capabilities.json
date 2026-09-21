@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Enables default permissions for Murmur windows","local":true,"windows":["main","overlay"],"permissions":["core:default"]}}

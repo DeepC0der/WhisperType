@@ -1,0 +1,104 @@
+/* Self-hosted fonts - 100% Offline */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/Inter-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/assets/fonts/Inter-Medium.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/assets/fonts/Inter-SemiBold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/Inter-Bold.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/assets/fonts/Silkscreen-Regular.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Silkscreen';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/assets/fonts/Silkscreen-Bold.woff2') format('woff2');
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 220 15% 7%;
+    --foreground: 210 20% 98%;
+    --card: 220 14% 10%;
+    --card-foreground: 210 20% 98%;
+    --popover: 220 14% 10%;
+    --popover-foreground: 210 20% 98%;
+    --primary: 152 75% 55%;
+    --primary-foreground: 220 15% 7%;
+    --secondary: 220 12% 16%;
+    --secondary-foreground: 210 20% 98%;
+    --muted: 220 12% 14%;
+    --muted-foreground: 215 15% 65%;
+    --accent: 220 12% 20%;
+    --accent-foreground: 210 20% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 20% 98%;
+    --border: 220 12% 18%;
+    --input: 220 12% 18%;
+    --ring: 152 75% 55%;
+    --radius: 0.5rem;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
