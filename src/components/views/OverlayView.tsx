@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore } from "@/store/useAppStore";
-import { Mic, Sparkles } from "lucide-react";
+import { Mic, Sparkles, Check } from "lucide-react";
 import { motion } from "framer-motion";
 
 export const OverlayView: React.FC = () => {
@@ -40,7 +40,9 @@ export const OverlayView: React.FC = () => {
           ) : appState === "TRANSCRIBING" ? (
             <Sparkles className="h-4 w-4 text-amber-400 animate-spin" />
           ) : appState === "INSERTING" ? (
-            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+          ) : appState === "DONE" ? (
+            <Check className="h-4 w-4 text-emerald-400 stroke-[2.5]" />
           ) : (
             <span className="h-2.5 w-2.5 rounded-full bg-primary" />
           )}
@@ -52,7 +54,7 @@ export const OverlayView: React.FC = () => {
                 ? "text-red-400"
                 : appState === "TRANSCRIBING"
                 ? "text-amber-400"
-                : appState === "INSERTING"
+                : appState === "INSERTING" || appState === "DONE"
                 ? "text-emerald-400"
                 : "text-foreground"
             }`}
@@ -63,6 +65,8 @@ export const OverlayView: React.FC = () => {
               ? "TRANSCRIBING..."
               : appState === "INSERTING"
               ? "INSERTING..."
+              : appState === "DONE"
+              ? "DONE"
               : "MURMUR IDLE"}
           </span>
         </div>

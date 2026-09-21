@@ -73,6 +73,36 @@ fn apply_overlay_styles(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_overlay_click_through(enabled: bool, app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        overlay_win
+            .set_click_through(enabled)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn position_overlay(anchor: Option<String>, app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        let anchor_str = anchor.unwrap_or_else(|| "bottom-center".to_string());
+        overlay_win
+            .position_overlay(&anchor_str)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn is_fullscreen_active(app: AppHandle) -> Result<bool, String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        Ok(overlay_win.is_fullscreen_active())
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
 fn inject_text(text: String, mode: Option<String>) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let injector = WindowsTextInjector::new();
@@ -328,6 +358,16 @@ fn create_hotkey_action_callback(
                 match next {
                     AppState::RECORDING => {
                         let settings = app.state::<SettingsManager>().get();
+
+                        // 1. Immediately position and show overlay (<50ms target)
+                        if let Some(w) = app.get_webview_window("overlay") {
+                            let is_fullscreen = w.is_fullscreen_active();
+                            let _ = app.emit("fullscreen-active", is_fullscreen);
+                            let _ = w.position_overlay(&settings.overlay_position);
+                            let _ = w.show_overlay();
+                        }
+
+                        // 2. Start audio capture
                         let mut cap = capture_arc.lock().unwrap();
                         if let Err(e) = cap.start_recording(
                             settings.audio_device.as_deref(),
@@ -336,8 +376,9 @@ fn create_hotkey_action_callback(
                             log::error!("Microphone start error: {e}");
                             sm.set_error(e.to_string());
                             let _ = app.emit("state-changed", sm.get_snapshot());
-                        } else if let Some(w) = app.get_webview_window("overlay") {
-                            let _ = w.show();
+                            if let Some(w) = app.get_webview_window("overlay") {
+                                let _ = w.hide_overlay();
+                            }
                         }
                     }
                     AppState::TRANSCRIBING => {
@@ -353,7 +394,12 @@ fn create_hotkey_action_callback(
                                         let settings = app_clone.state::<SettingsManager>().get();
                                         let db = app_clone.state::<Database>();
 
-                                        // Resample to 16kHz mono PCM
+                                        // Check cancellation
+                                        if sm.get_state() != AppState::TRANSCRIBING {
+                                            return;
+                                        }
+
+                                        // 1. Resample to 16kHz mono PCM with delay compensation
                                         let pcm = match resample_and_normalize(
                                             &captured.samples,
                                             captured.sample_rate,
@@ -365,69 +411,104 @@ fn create_hotkey_action_callback(
                                                 sm.set_error(e.to_string());
                                                 let _ = app_clone.emit("state-changed", sm.get_snapshot());
                                                 if let Some(w) = app_clone.get_webview_window("overlay") {
-                                                    let _ = w.hide();
+                                                    let _ = w.hide_overlay();
                                                 }
                                                 return;
                                             }
                                         };
 
+                                        if sm.get_state() != AppState::TRANSCRIBING {
+                                            return;
+                                        }
+
                                         let post_cfg = PostProcessConfig::from(&settings);
                                         let dict = db.get_dictionary().unwrap_or_default();
 
+                                        // 2. Transcribe samples (VAD trimming, Parakeet inference, chunking, postprocessing)
                                         match engine.transcribe_samples(&pcm, &post_cfg, &dict) {
                                             Ok(result) => {
+                                                if sm.get_state() != AppState::TRANSCRIBING {
+                                                    return;
+                                                }
+
+                                                // Discard silently if speech < 300ms or silent
                                                 if result.discarded_silent || result.final_text.is_empty() {
+                                                    log::info!("VAD discarded audio (silent or <300ms speech). Resetting to IDLE.");
                                                     sm.reset_to_idle();
                                                     let _ = app_clone.emit("state-changed", sm.get_snapshot());
                                                     if let Some(w) = app_clone.get_webview_window("overlay") {
-                                                        let _ = w.hide();
+                                                        let _ = w.hide_overlay();
+                                                    }
+                                                    return;
+                                                }
+
+                                                // 3. Emit transcript ready event
+                                                let _ = app_clone.emit("transcript-ready", &result.final_text);
+
+                                                // 4. Perform text injection if auto-insert enabled
+                                                if settings.auto_insert {
+                                                    if sm.transition_to(AppState::INSERTING).is_ok() {
+                                                        let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                    }
+
+                                                    let inject_mode = match settings.insertion_mode {
+                                                        InsertionMode::UnicodeTyping => Some("unicode".to_string()),
+                                                        InsertionMode::PasteWithRestore => None,
+                                                    };
+
+                                                    if let Err(e) = inject_text(result.final_text.clone(), inject_mode) {
+                                                        log::warn!("Text injection failed ({e}). Falling back to clipboard copy.");
+                                                        if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                            let _ = cb.set_text(&result.final_text);
+                                                        }
+                                                        let _ = app_clone.emit("injection-fallback", serde_json::json!({
+                                                            "text": &result.final_text,
+                                                            "error": e,
+                                                        }));
                                                     }
                                                 } else {
-                                                    let _ = db.insert_history(
-                                                        NewHistoryRecord {
-                                                            raw_text: result.raw_text.clone(),
-                                                            final_text: result.final_text.clone(),
-                                                            duration_ms: result.duration_ms,
-                                                            language: Some("en".to_string()),
-                                                            model_variant: Some(settings.model_variant),
-                                                            provider: Some(result.provider.clone()),
-                                                            inference_ms: Some(result.inference_ms),
-                                                        },
-                                                        settings.history_retention_max,
-                                                    );
-
-                                                    let _ = app_clone.emit("transcript-ready", &result.final_text);
-
-                                                    if settings.auto_insert {
-                                                        if sm.transition_to(AppState::INSERTING).is_ok() {
-                                                            let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                                                        }
-                                                        if let Some(w) = app_clone.get_webview_window("overlay") {
-                                                            let _ = w.hide();
-                                                        }
-
-                                                        let inject_mode = match settings.insertion_mode {
-                                                            InsertionMode::UnicodeTyping => Some("unicode".to_string()),
-                                                            InsertionMode::PasteWithRestore => None,
-                                                        };
-                                                        let _ = inject_text(result.final_text, inject_mode);
-                                                        sm.reset_to_idle();
-                                                        let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                                                    } else {
-                                                        sm.reset_to_idle();
-                                                        let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                                                        if let Some(w) = app_clone.get_webview_window("overlay") {
-                                                            let _ = w.hide();
-                                                        }
+                                                    // Copy to clipboard even if auto_insert is false
+                                                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                                                        let _ = cb.set_text(&result.final_text);
                                                     }
                                                 }
+
+                                                // 5. Save entry to SQLite history database
+                                                let _ = db.insert_history(
+                                                    NewHistoryRecord {
+                                                        raw_text: result.raw_text.clone(),
+                                                        final_text: result.final_text.clone(),
+                                                        duration_ms: result.duration_ms,
+                                                        language: Some("en".to_string()),
+                                                        model_variant: Some(settings.model_variant),
+                                                        provider: Some(result.provider.clone()),
+                                                        inference_ms: Some(result.inference_ms),
+                                                    },
+                                                    settings.history_retention_max,
+                                                );
+
+                                                // 6. Transition to AppState::DONE and show checkmark on overlay for ~600ms
+                                                if sm.transition_to(AppState::DONE).is_ok() {
+                                                    let _ = app_clone.emit("state-changed", sm.get_snapshot());
+                                                }
+
+                                                std::thread::sleep(std::time::Duration::from_millis(600));
+
+                                                // 7. Hide overlay window completely
+                                                if let Some(w) = app_clone.get_webview_window("overlay") {
+                                                    let _ = w.hide_overlay();
+                                                }
+
+                                                // 8. Return to AppState::IDLE
+                                                sm.reset_to_idle();
+                                                let _ = app_clone.emit("state-changed", sm.get_snapshot());
                                             }
                                             Err(e) => {
                                                 log::error!("Transcription error: {e}");
                                                 sm.set_error(e.to_string());
                                                 let _ = app_clone.emit("state-changed", sm.get_snapshot());
                                                 if let Some(w) = app_clone.get_webview_window("overlay") {
-                                                    let _ = w.hide();
+                                                    let _ = w.hide_overlay();
                                                 }
                                             }
                                         }
@@ -445,7 +526,7 @@ fn create_hotkey_action_callback(
                         let mut cap = capture_arc.lock().unwrap();
                         cap.cancel_recording();
                         if let Some(w) = app.get_webview_window("overlay") {
-                            let _ = w.hide();
+                            let _ = w.hide_overlay();
                         }
                     }
                     _ => {}
@@ -559,6 +640,9 @@ pub fn run() {
             transition_state,
             reset_state,
             apply_overlay_styles,
+            set_overlay_click_through,
+            position_overlay,
+            is_fullscreen_active,
             inject_text,
             is_autostart_enabled,
             set_autostart_enabled,
@@ -583,11 +667,13 @@ pub fn run() {
             benchmark_model,
         ])
         .setup(move |app| {
-            // Apply overlay styles to overlay window if it exists at startup
+            // Apply overlay styles and initial positioning to overlay window if it exists at startup
             if let Some(overlay_window) = app.get_webview_window("overlay") {
                 if let Err(e) = overlay_window.apply_overlay_styles() {
                     log::warn!("Could not apply overlay styles on startup: {e}");
                 }
+                let current_settings = settings_manager.get();
+                let _ = overlay_window.position_overlay(&current_settings.overlay_position);
             }
 
             // Initialize HotkeyService wired to AppState and AudioCapture

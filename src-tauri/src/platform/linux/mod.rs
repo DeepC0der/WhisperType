@@ -124,4 +124,30 @@ impl OverlayWindowExt for tauri::WebviewWindow {
             "Linux overlay window styling not yet implemented. See LINUX_TODO.md.".into(),
         ))
     }
+
+    fn set_click_through(&self, _click_through: bool) -> Result<(), PlatformError> {
+        Err(PlatformError::NotImplemented(
+            "Linux overlay click-through not yet implemented. See LINUX_TODO.md.".into(),
+        ))
+    }
+
+    fn position_overlay(&self, _anchor: &str) -> Result<(), PlatformError> {
+        Err(PlatformError::NotImplemented(
+            "Linux overlay positioning not yet implemented. See LINUX_TODO.md.".into(),
+        ))
+    }
+
+    fn is_fullscreen_active(&self) -> bool {
+        false
+    }
+
+    fn show_overlay(&self) -> Result<(), PlatformError> {
+        let _ = self.show();
+        Ok(())
+    }
+
+    fn hide_overlay(&self) -> Result<(), PlatformError> {
+        let _ = self.hide();
+        Ok(())
+    }
 }

@@ -10,6 +10,7 @@ pub enum AppState {
     RECORDING,
     TRANSCRIBING,
     INSERTING,
+    DONE,
     ERROR,
 }
 
@@ -80,8 +81,9 @@ impl AppStateManager {
         let is_valid = match (cur, next) {
             // Can transition to ERROR from any state
             (_, AppState::ERROR) => true,
-            // Can transition to IDLE from ERROR, INSERTING, RECORDING (cancel), or TRANSCRIBING (silence / abort)
+            // Can transition to IDLE from ERROR, DONE, INSERTING, RECORDING (cancel), or TRANSCRIBING (silence / abort)
             (AppState::ERROR, AppState::IDLE) => true,
+            (AppState::DONE, AppState::IDLE) => true,
             (AppState::INSERTING, AppState::IDLE) => true,
             (AppState::RECORDING, AppState::IDLE) => true,
             (AppState::TRANSCRIBING, AppState::IDLE) => true,
@@ -89,6 +91,8 @@ impl AppStateManager {
             (AppState::IDLE, AppState::RECORDING) => true,
             (AppState::RECORDING, AppState::TRANSCRIBING) => true,
             (AppState::TRANSCRIBING, AppState::INSERTING) => true,
+            (AppState::TRANSCRIBING, AppState::DONE) => true, // When auto-insert is disabled
+            (AppState::INSERTING, AppState::DONE) => true,
             // Idempotent re-entry
             (a, b) if a == b => true,
             _ => false,
@@ -157,7 +161,23 @@ mod tests {
         assert!(sm.transition_to(AppState::INSERTING).is_ok());
         assert_eq!(sm.get_state(), AppState::INSERTING);
 
-        // INSERTING -> IDLE
+        // INSERTING -> DONE
+        assert!(sm.transition_to(AppState::DONE).is_ok());
+        assert_eq!(sm.get_state(), AppState::DONE);
+
+        // DONE -> IDLE
+        assert!(sm.transition_to(AppState::IDLE).is_ok());
+        assert_eq!(sm.get_state(), AppState::IDLE);
+    }
+
+    #[test]
+    fn test_done_direct_from_transcribing() {
+        let sm = AppStateManager::new();
+        // IDLE -> RECORDING -> TRANSCRIBING -> DONE -> IDLE (when auto_insert is false)
+        assert!(sm.transition_to(AppState::RECORDING).is_ok());
+        assert!(sm.transition_to(AppState::TRANSCRIBING).is_ok());
+        assert!(sm.transition_to(AppState::DONE).is_ok());
+        assert_eq!(sm.get_state(), AppState::DONE);
         assert!(sm.transition_to(AppState::IDLE).is_ok());
         assert_eq!(sm.get_state(), AppState::IDLE);
     }
@@ -191,6 +211,13 @@ mod tests {
         // RECORDING -> INSERTING (invalid: must transcribe first)
         assert!(sm.transition_to(AppState::RECORDING).is_ok());
         assert!(sm.transition_to(AppState::INSERTING).is_err());
+
+        // DONE -> RECORDING / INSERTING (invalid: must reset to IDLE first)
+        assert!(sm.transition_to(AppState::TRANSCRIBING).is_ok());
+        assert!(sm.transition_to(AppState::DONE).is_ok());
+        assert!(sm.transition_to(AppState::RECORDING).is_err());
+        assert!(sm.transition_to(AppState::INSERTING).is_err());
+        assert!(sm.transition_to(AppState::TRANSCRIBING).is_err());
     }
 
     #[test]

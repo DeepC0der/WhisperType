@@ -61,6 +61,21 @@ pub trait TextInjector: Send + Sync {
 pub trait OverlayWindowExt {
     /// Apply extended overlay styles (e.g. non-activating, click-through, transparent, toolwindow).
     fn apply_overlay_styles(&self) -> Result<(), PlatformError>;
+
+    /// Set click-through state (if true, clicks pass through; if false, clicks are interactive e.g. for repositioning).
+    fn set_click_through(&self, click_through: bool) -> Result<(), PlatformError>;
+
+    /// Position overlay on the active or cursor monitor according to user-selected anchor.
+    fn position_overlay(&self, anchor: &str) -> Result<(), PlatformError>;
+
+    /// Check if a fullscreen application or presentation is currently active.
+    fn is_fullscreen_active(&self) -> bool;
+
+    /// Show overlay window instantly without stealing focus (<50ms target).
+    fn show_overlay(&self) -> Result<(), PlatformError>;
+
+    /// Hide overlay native window completely to consume 0% CPU/GPU when idle.
+    fn hide_overlay(&self) -> Result<(), PlatformError>;
 }
 
 /// Trait abstracting launch-on-login / autostart configuration.

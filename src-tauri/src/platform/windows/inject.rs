@@ -1,5 +1,6 @@
 use crate::platform::{PlatformError, TextInjector};
 use arboard::Clipboard;
+use std::borrow::Cow;
 use std::thread::sleep;
 use std::time::Duration;
 use windows::Win32::System::StationsAndDesktops::{
@@ -12,6 +13,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 const VK_V: VIRTUAL_KEY = VIRTUAL_KEY(0x56);
+const CLIPBOARD_RETRY_COUNT: usize = 5;
+const CLIPBOARD_RETRY_DELAY: Duration = Duration::from_millis(20);
 
 unsafe fn attach_thread_to_input_desktop() -> Option<HDESK> {
     if let Ok(hdesk) = OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_ACCESS_FLAGS(0x01FF)) {
@@ -21,6 +24,58 @@ unsafe fn attach_thread_to_input_desktop() -> Option<HDESK> {
         let _ = CloseDesktop(hdesk);
     }
     None
+}
+
+/// Attempt to open system clipboard with retries in case another process currently holds the lock.
+fn open_clipboard_with_retry(max_retries: usize, delay: Duration) -> Result<Clipboard, PlatformError> {
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            sleep(delay);
+        }
+        match Clipboard::new() {
+            Ok(cb) => return Ok(cb),
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(PlatformError::ClipboardError(format!(
+        "Failed to open clipboard after {max_retries} attempts (locked by another process): {:?}",
+        last_err
+    )))
+}
+
+/// Attempt to set clipboard text with retries.
+fn set_clipboard_text_with_retry(
+    clipboard: &mut Clipboard,
+    text: &str,
+    max_retries: usize,
+    delay: Duration,
+) -> Result<(), PlatformError> {
+    let mut last_err = None;
+    for attempt in 0..max_retries {
+        if attempt > 0 {
+            sleep(delay);
+        }
+        match clipboard.set_text(text) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = Some(e);
+            }
+        }
+    }
+    Err(PlatformError::ClipboardError(format!(
+        "Failed to write text to clipboard after {max_retries} attempts: {:?}",
+        last_err
+    )))
+}
+
+/// Snapshot of clipboard content before injection for complete restoration.
+enum SavedClipboard {
+    Text(String),
+    Image(arboard::ImageData<'static>),
+    Empty,
 }
 
 /// Windows implementation of TextInjector utilizing Win32 SendInput and arboard.
@@ -40,19 +95,25 @@ impl Default for WindowsTextInjector {
 
 impl TextInjector for WindowsTextInjector {
     fn inject_paste(&self, text: &str) -> Result<(), PlatformError> {
-        let mut clipboard = Clipboard::new().map_err(|e| {
-            PlatformError::ClipboardError(format!("Failed to open clipboard: {e}"))
-        })?;
+        let mut clipboard = open_clipboard_with_retry(CLIPBOARD_RETRY_COUNT, CLIPBOARD_RETRY_DELAY)?;
 
-        // 1. Save original clipboard text
-        let original_text = clipboard.get_text().ok();
+        // 1. Save original clipboard contents (text or image)
+        let saved_content = if let Ok(orig_text) = clipboard.get_text() {
+            SavedClipboard::Text(orig_text)
+        } else if let Ok(orig_img) = clipboard.get_image() {
+            SavedClipboard::Image(arboard::ImageData {
+                width: orig_img.width,
+                height: orig_img.height,
+                bytes: Cow::Owned(orig_img.bytes.into_owned()),
+            })
+        } else {
+            SavedClipboard::Empty
+        };
 
-        // 2. Set injection text to clipboard
-        clipboard.set_text(text).map_err(|e| {
-            PlatformError::ClipboardError(format!("Failed to write to clipboard: {e}"))
-        })?;
+        // 2. Set injection text to clipboard with retries
+        set_clipboard_text_with_retry(&mut clipboard, text, CLIPBOARD_RETRY_COUNT, CLIPBOARD_RETRY_DELAY)?;
 
-        // 3. Emulate Ctrl+V via SendInput
+        // 3. Emulate Ctrl+V via SendInput attached to input desktop
         let send_result = std::thread::spawn(|| {
             let _hdesk = unsafe { attach_thread_to_input_desktop() };
             let inputs = [
@@ -126,14 +187,27 @@ impl TextInjector for WindowsTextInjector {
             ));
         }
 
-        // 4. Delay 120ms to allow target window to process paste event (Decision D10)
+        // 4. Delay ~120ms to allow target window to process paste event (Decision D10)
         sleep(Duration::from_millis(120));
 
-        // 5. Restore clipboard contents
-        if let Some(orig) = original_text {
-            let _ = clipboard.set_text(orig);
-        } else {
-            let _ = clipboard.clear();
+        // 5. Restore original clipboard contents
+        if let Ok(mut restore_cb) = open_clipboard_with_retry(CLIPBOARD_RETRY_COUNT, CLIPBOARD_RETRY_DELAY) {
+            match saved_content {
+                SavedClipboard::Text(orig_text) => {
+                    let _ = set_clipboard_text_with_retry(
+                        &mut restore_cb,
+                        &orig_text,
+                        CLIPBOARD_RETRY_COUNT,
+                        CLIPBOARD_RETRY_DELAY,
+                    );
+                }
+                SavedClipboard::Image(orig_img) => {
+                    let _ = restore_cb.set_image(orig_img);
+                }
+                SavedClipboard::Empty => {
+                    let _ = restore_cb.clear();
+                }
+            }
         }
 
         Ok(())
@@ -189,5 +263,37 @@ impl TextInjector for WindowsTextInjector {
         })
         .join()
         .map_err(|_| PlatformError::OsError("Unicode injection thread panicked".into()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_text_injector_creation() {
+        let injector = WindowsTextInjector::new();
+        let _default = WindowsTextInjector;
+        let _ = injector;
+    }
+
+    #[test]
+    fn test_clipboard_save_and_restore_cycle() {
+        let mut cb = match Clipboard::new() {
+            Ok(c) => c,
+            Err(_) => return, // In headless CI without desktop window station, skip gracefully
+        };
+
+        let original = "Murmur Unit Test Original String";
+        let _ = cb.set_text(original);
+
+        let injector = WindowsTextInjector::new();
+        // Injecting text pastes to active window; original clipboard should be restored
+        let _ = injector.inject_paste("Injected string");
+
+        // Verify restored text
+        if let Ok(after) = cb.get_text() {
+            assert_eq!(after, original);
+        }
     }
 }

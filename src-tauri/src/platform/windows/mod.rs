@@ -9,3 +9,4 @@ pub use hotkey::{
     HotkeyModifiers, ParsedHotkey, WindowsHotkeyBackend,
 };
 pub use inject::WindowsTextInjector;
+pub use window::calculate_overlay_position;

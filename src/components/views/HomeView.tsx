@@ -58,6 +58,7 @@ export const HomeView: React.FC = () => {
       case "TRANSCRIBING":
         return "text-amber-400 border-amber-400/40 bg-amber-400/10";
       case "INSERTING":
+      case "DONE":
         return "text-emerald-400 border-emerald-400/40 bg-emerald-400/10";
       case "ERROR":
         return "text-rose-500 border-rose-500/40 bg-rose-500/10";
@@ -79,7 +80,7 @@ export const HomeView: React.FC = () => {
                   ? "bg-red-500 animate-ping"
                   : appState === "TRANSCRIBING"
                   ? "bg-amber-400 animate-pulse"
-                  : appState === "INSERTING"
+                  : appState === "INSERTING" || appState === "DONE"
                   ? "bg-emerald-400"
                   : "bg-primary"
               }`}
@@ -149,6 +150,8 @@ export const HomeView: React.FC = () => {
                 ? "Transcribing Audio..."
                 : appState === "INSERTING"
                 ? "Injecting Text via Clipboard..."
+                : appState === "DONE"
+                ? "Dictation Complete!"
                 : appState === "ERROR"
                 ? "Error Occurred"
                 : "Ready to Dictate"}
@@ -158,6 +161,8 @@ export const HomeView: React.FC = () => {
                 ? `Press ${hotkey} anywhere or click above to start`
                 : appState === "RECORDING"
                 ? "Speak naturally. Release hotkey or click above to transcribe."
+                : appState === "DONE"
+                ? "Text inserted successfully."
                 : appState === "ERROR"
                 ? errorMessage || "An unexpected error occurred."
                 : "Processing pipeline..."}

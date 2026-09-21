@@ -1,6 +1,6 @@
 import { create } from "zustand";
 
-export type StateKind = "IDLE" | "RECORDING" | "TRANSCRIBING" | "INSERTING" | "ERROR";
+export type StateKind = "IDLE" | "RECORDING" | "TRANSCRIBING" | "INSERTING" | "DONE" | "ERROR";
 
 export interface HistoryEntry {
   id: string;

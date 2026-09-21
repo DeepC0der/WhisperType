@@ -528,9 +528,9 @@ impl HotkeyModeController {
     pub fn handle_action(&self, action: HotkeyAction, current_state: AppState) -> Option<AppState> {
         match action {
             HotkeyAction::Cancel => {
-                // Esc key pressed: cancel recording cleanly and reset to IDLE
+                // Esc key pressed: cancel recording or transcribing cleanly and reset to IDLE
                 *self.press_time.lock().unwrap() = None;
-                if current_state == AppState::RECORDING {
+                if current_state == AppState::RECORDING || current_state == AppState::TRANSCRIBING {
                     Some(AppState::IDLE)
                 } else {
                     None
@@ -825,13 +825,23 @@ mod tests {
                 Some(AppState::IDLE)
             );
 
-            // Cancel when not RECORDING does nothing
+            // Cancel during TRANSCRIBING also resets to IDLE
+            assert_eq!(
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::TRANSCRIBING),
+                Some(AppState::IDLE)
+            );
+
+            // Cancel when not RECORDING/TRANSCRIBING does nothing
             assert_eq!(
                 ctrl.handle_action(HotkeyAction::Cancel, AppState::IDLE),
                 None
             );
             assert_eq!(
-                ctrl.handle_action(HotkeyAction::Cancel, AppState::TRANSCRIBING),
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::INSERTING),
+                None
+            );
+            assert_eq!(
+                ctrl.handle_action(HotkeyAction::Cancel, AppState::DONE),
                 None
             );
         }
