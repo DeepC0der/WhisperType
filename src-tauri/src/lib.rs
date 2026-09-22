@@ -430,10 +430,8 @@ fn import_dictionary(
 ) -> Result<usize, String> {
     let mut count = 0;
     for entry in entries {
-        if !entry.find_text.trim().is_empty() {
-            if db.insert_dictionary(entry).is_ok() {
-                count += 1;
-            }
+        if !entry.find_text.trim().is_empty() && db.insert_dictionary(entry).is_ok() {
+            count += 1;
         }
     }
     Ok(count)

@@ -12,7 +12,12 @@ fn main() {
             let deps_dir = target_profile_dir.join("deps");
             let _ = std::fs::create_dir_all(&deps_dir);
 
-            for dll in ["onnxruntime.dll", "sherpa-onnx-c-api.dll"] {
+            for dll in [
+                "onnxruntime.dll",
+                "onnxruntime_providers_shared.dll",
+                "sherpa-onnx-c-api.dll",
+                "sherpa-onnx-cxx-api.dll",
+            ] {
                 let src = target_profile_dir.join(dll);
                 let dst = deps_dir.join(dll);
                 if src.exists() {
