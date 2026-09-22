@@ -234,6 +234,16 @@ impl Database {
         Ok(count > 0)
     }
 
+    /// Update a history entry's final text.
+    pub fn update_history(&self, id: &str, final_text: &str) -> Result<bool, DbError> {
+        let conn = self.conn.lock().map_err(|_| DbError::LockPoisoned)?;
+        let count = conn.execute(
+            "UPDATE history SET final_text = ?1 WHERE id = ?2",
+            params![final_text, id],
+        )?;
+        Ok(count > 0)
+    }
+
     /// Clear all history records.
     pub fn clear_history(&self) -> Result<usize, DbError> {
         let conn = self.conn.lock().map_err(|_| DbError::LockPoisoned)?;
@@ -455,13 +465,19 @@ mod tests {
         assert_eq!(entries[1].final_text, "Final 4");
         assert_eq!(entries[2].final_text, "Final 3");
 
-        // 2. Delete single entry
+        // 2. Update single entry
+        let id_to_update = &entries[1].id;
+        assert!(db.update_history(id_to_update, "Edited Final 4").unwrap());
+        let entries_updated = db.get_history(None, None).unwrap();
+        assert_eq!(entries_updated[1].final_text, "Edited Final 4");
+
+        // 3. Delete single entry
         let id_to_delete = &entries[0].id;
         assert!(db.delete_history(id_to_delete).unwrap());
         let entries_after = db.get_history(None, None).unwrap();
         assert_eq!(entries_after.len(), 2);
 
-        // 3. Clear history
+        // 4. Clear history
         assert_eq!(db.clear_history().unwrap(), 2);
         assert_eq!(db.get_history(None, None).unwrap().len(), 0);
     }

@@ -8,6 +8,8 @@ import { OverlayView } from "@/components/views/OverlayView";
 import { Mic, History, BookA, Settings, ShieldCheck } from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
 
+import { OnboardingModal } from "@/components/views/OnboardingModal";
+
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
 
@@ -19,15 +21,15 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   ];
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden">
+    <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden scanlines-overlay">
       {/* App Header */}
-      <header className="h-14 border-b border-border bg-card/60 backdrop-blur px-6 flex items-center justify-between shrink-0 select-none">
+      <header className="h-14 border-b border-border/80 bg-card/70 backdrop-blur px-6 flex items-center justify-between shrink-0 select-none pixel-border z-20">
         <div className="flex items-center space-x-3">
-          <div className="h-8 w-8 rounded-lg bg-primary/10 border border-primary/40 flex items-center justify-center">
+          <div className="h-8 w-8 rounded-md bg-primary/10 border border-primary/40 flex items-center justify-center glow-box">
             <Mic className="h-4 w-4 text-primary" />
           </div>
           <div>
-            <h1 className="font-pixel text-sm tracking-wider font-bold uppercase text-foreground">
+            <h1 className="font-pixel text-sm tracking-wider font-bold uppercase text-foreground phosphor-glow-subtle">
               MURMUR
             </h1>
             <p className="text-[10px] text-muted-foreground">Offline Local Dictation</p>
@@ -35,7 +37,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="flex items-center space-x-1 bg-secondary/50 p-1 rounded-lg border border-border/40">
+        <nav className="flex items-center space-x-1 bg-secondary/50 p-1 rounded-lg border border-border/50">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -45,7 +47,7 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
                 to={item.path}
                 className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                   isActive
-                    ? "bg-background text-foreground shadow-sm"
+                    ? "bg-background text-foreground shadow-sm pixel-border"
                     : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
                 }`}
               >
@@ -59,22 +61,31 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
         {/* Status Indicator */}
         <div className="flex items-center space-x-2 text-xs">
           <ShieldCheck className="h-4 w-4 text-primary" />
-          <span className="font-pixel text-[10px] text-muted-foreground uppercase hidden sm:inline">
+          <span className="font-pixel text-[10px] text-muted-foreground uppercase hidden sm:inline phosphor-glow-subtle">
             100% OFFLINE
           </span>
         </div>
       </header>
 
       {/* Main Content Area */}
-      <main className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full">
+      <main className="flex-1 overflow-y-auto p-6 max-w-4xl mx-auto w-full z-10">
         {children}
       </main>
+
+      {/* First-Run Onboarding Modal Wizard */}
+      <OnboardingModal />
     </div>
   );
 };
 
 export const App: React.FC = () => {
   React.useEffect(() => {
+    // Initial fetch of settings and history
+    useAppStore.getState().fetchSettings();
+    useAppStore.getState().fetchHistory();
+
+    let unlistenAll: (() => void) | null = null;
+
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       import("@tauri-apps/api/event")
         .then(({ listen }) => {
@@ -90,13 +101,27 @@ export const App: React.FC = () => {
               .getState()
               .setAppState(event.payload.current_state, event.payload.error_message);
           });
-          return () => {
+          const unlistenTranscript = listen<string>("transcript-ready", (event) => {
+            useAppStore.getState().setLastTranscript(event.payload);
+            if (useAppStore.getState().settings.persistent_history) {
+              useAppStore.getState().fetchHistory();
+            } else {
+              useAppStore.getState().addSessionTranscript(event.payload);
+            }
+          });
+
+          unlistenAll = () => {
             unlistenMic.then((fn) => fn()).catch(() => {});
             unlistenState.then((fn) => fn()).catch(() => {});
+            unlistenTranscript.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});
     }
+
+    return () => {
+      if (unlistenAll) unlistenAll();
+    };
   }, []);
 
   return (

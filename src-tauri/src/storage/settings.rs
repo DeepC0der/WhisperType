@@ -65,6 +65,34 @@ fn default_overlay_position() -> String {
     "bottom-center".to_string()
 }
 
+fn default_gain_percent() -> u32 {
+    100
+}
+
+fn default_max_recording_seconds() -> u32 {
+    60
+}
+
+fn default_thread_count() -> u32 {
+    4
+}
+
+fn default_overlay_size() -> String {
+    "M".to_string()
+}
+
+fn default_dim_delay_seconds() -> u32 {
+    2
+}
+
+fn default_dim_opacity_percent() -> u32 {
+    40
+}
+
+fn default_fullscreen_behavior() -> String {
+    "show".to_string()
+}
+
 /// Strongly-typed application configuration with serde defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
@@ -124,6 +152,42 @@ pub struct AppSettings {
 
     #[serde(default)]
     pub idle_unload_minutes: u32,
+
+    #[serde(default = "default_gain_percent")]
+    pub audio_gain_percent: u32,
+
+    #[serde(default = "default_max_recording_seconds")]
+    pub max_recording_seconds: u32,
+
+    #[serde(default = "default_true")]
+    pub persistent_history: bool,
+
+    #[serde(default)]
+    pub store_audio: bool,
+
+    #[serde(default = "default_thread_count")]
+    pub thread_count: u32,
+
+    #[serde(default = "default_overlay_size")]
+    pub overlay_size: String,
+
+    #[serde(default = "default_dim_delay_seconds")]
+    pub dim_delay_seconds: u32,
+
+    #[serde(default = "default_dim_opacity_percent")]
+    pub dim_opacity_percent: u32,
+
+    #[serde(default)]
+    pub ultra_minimal_mode: bool,
+
+    #[serde(default = "default_true")]
+    pub brighten_on_speech: bool,
+
+    #[serde(default = "default_fullscreen_behavior")]
+    pub fullscreen_behavior: String,
+
+    #[serde(default)]
+    pub first_run_completed: bool,
 }
 
 impl Default for AppSettings {
@@ -148,6 +212,18 @@ impl Default for AppSettings {
             apply_dictionary: true,
             add_trailing_space: false,
             idle_unload_minutes: 0,
+            audio_gain_percent: default_gain_percent(),
+            max_recording_seconds: default_max_recording_seconds(),
+            persistent_history: true,
+            store_audio: false,
+            thread_count: default_thread_count(),
+            overlay_size: default_overlay_size(),
+            dim_delay_seconds: default_dim_delay_seconds(),
+            dim_opacity_percent: default_dim_opacity_percent(),
+            ultra_minimal_mode: false,
+            brighten_on_speech: true,
+            fullscreen_behavior: default_fullscreen_behavior(),
+            first_run_completed: false,
         }
     }
 }
