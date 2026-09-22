@@ -26,8 +26,8 @@
       {
         "label": "overlay",
         "title": "Murmur Overlay",
-        "width": 360,
-        "height": 90,
+        "width": 240,
+        "height": 54,
         "resizable": false,
         "visible": false,
         "decorations": false,

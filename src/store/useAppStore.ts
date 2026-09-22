@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { applyThemeToDocument } from "@/lib/theme";
 
 export type StateKind = "IDLE" | "RECORDING" | "TRANSCRIBING" | "INSERTING" | "DONE" | "ERROR";
 export type HotkeyMode = "hold-to-talk" | "toggle" | "hybrid";
@@ -141,6 +142,7 @@ interface AppStore {
   setRecordingDuration: (duration: number) => void;
   setMicLevel: (level: number) => void;
   setShowOnboarding: (show: boolean) => void;
+  applySettingsUpdate: (settings: AppSettings) => void;
 
   addSessionTranscript: (transcript: string) => void;
   fetchSettings: () => Promise<void>;
@@ -225,6 +227,10 @@ export const useAppStore = create<AppStore>((set, get) => ({
   setRecordingDuration: (recordingDuration) => set({ recordingDuration }),
   setMicLevel: (micLevel) => set({ micLevel }),
   setShowOnboarding: (showOnboarding) => set({ showOnboarding }),
+  applySettingsUpdate: (settings) => {
+    set({ settings });
+    applyThemeToDocument(settings.theme || "dark");
+  },
   addSessionTranscript: (transcript: string) => {
     const entry: HistoryRecord = {
       id: `session-${Date.now()}`,
@@ -247,13 +253,7 @@ export const useAppStore = create<AppStore>((set, get) => ({
         settings: s,
         showOnboarding: !s.first_run_completed,
       });
-      // Apply theme to document
-      if (typeof document !== "undefined") {
-        document.documentElement.className = "";
-        if (s.theme && s.theme !== "dark") {
-          document.documentElement.classList.add(`theme-${s.theme}`);
-        }
-      }
+      applyThemeToDocument(s.theme || "dark");
     } catch {
       // In dev browser fallback
     }
@@ -263,11 +263,8 @@ export const useAppStore = create<AppStore>((set, get) => ({
     const updated = { ...get().settings, ...partial };
     set({ settings: updated });
     // Apply theme change immediately
-    if (partial.theme && typeof document !== "undefined") {
-      document.documentElement.className = "";
-      if (partial.theme !== "dark") {
-        document.documentElement.classList.add(`theme-${partial.theme}`);
-      }
+    if (partial.theme) {
+      applyThemeToDocument(partial.theme);
     }
     try {
       await invokeTauri("update_settings", { newSettings: updated });

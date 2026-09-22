@@ -197,7 +197,7 @@ impl OverlayWindowExt for tauri::WebviewWindow {
             {
                 (win_rect.right - win_rect.left, win_rect.bottom - win_rect.top)
             } else {
-                (360, 90)
+                (240, 54)
             };
 
             let (x, y) = calculate_overlay_position(&mi.rcWork, win_w, win_h, anchor);
@@ -375,5 +375,18 @@ mod tests {
         let (x, y) = calculate_overlay_position(&work, 360, 90, "some-random-invalid-anchor");
         assert_eq!(x, 780);
         assert_eq!(y, 902);
+    }
+
+    #[test]
+    fn test_calculate_overlay_position_compact_dimensions() {
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let (x, y) = calculate_overlay_position(&work, 240, 54, "bottom-center");
+        assert_eq!(x, (1920 - 240) / 2); // 840
+        assert_eq!(y, 1040 - 54 - 48); // 938
     }
 }

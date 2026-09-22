@@ -109,11 +109,18 @@ export const App: React.FC = () => {
               useAppStore.getState().addSessionTranscript(event.payload);
             }
           });
+          const unlistenSettings = listen<import("@/store/useAppStore").AppSettings>(
+            "settings-changed",
+            (event) => {
+              useAppStore.getState().applySettingsUpdate(event.payload);
+            }
+          );
 
           unlistenAll = () => {
             unlistenMic.then((fn) => fn()).catch(() => {});
             unlistenState.then((fn) => fn()).catch(() => {});
             unlistenTranscript.then((fn) => fn()).catch(() => {});
+            unlistenSettings.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});

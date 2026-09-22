@@ -294,6 +294,8 @@ fn update_settings(
         )?;
     }
 
+    let _ = app.emit("settings-changed", &new_settings);
+
     Ok(())
 }
 

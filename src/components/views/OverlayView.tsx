@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from "react";
 import { useAppStore, StateKind, AppSettings, defaultSettings } from "@/store/useAppStore";
+import { applyThemeToDocument } from "@/lib/theme";
 import { Sparkles, Check, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
 
@@ -29,9 +30,7 @@ export const OverlayView: React.FC = () => {
           invoke<AppSettings>("get_settings")
             .then((s) => {
               setSettings(s);
-              if (typeof document !== "undefined" && s.theme && s.theme !== "dark") {
-                document.documentElement.className = `theme-${s.theme}`;
-              }
+              applyThemeToDocument(s.theme || "dark");
             })
             .catch(() => {});
 
@@ -59,9 +58,15 @@ export const OverlayView: React.FC = () => {
             setMicLevel(event.payload);
           });
 
+          const unlistenSettings = listen<AppSettings>("settings-changed", (event) => {
+            setSettings(event.payload);
+            applyThemeToDocument(event.payload.theme || "dark");
+          });
+
           unlistenAll = () => {
             unlistenState.then((fn) => fn()).catch(() => {});
             unlistenMic.then((fn) => fn()).catch(() => {});
+            unlistenSettings.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});
@@ -126,33 +131,36 @@ export const OverlayView: React.FC = () => {
   // Size styling map
   const isMinimal = settings.ultra_minimal_mode;
   const sizeClasses = {
-    S: isMinimal ? "h-9 px-2.5 gap-2 min-w-[90px]" : "h-10 px-3 text-[11px] gap-2.5 min-w-[170px]",
-    M: isMinimal ? "h-10 px-3 gap-2.5 min-w-[100px]" : "h-12 px-4 text-xs gap-3 min-w-[200px]",
-    L: isMinimal ? "h-12 px-3.5 gap-3 min-w-[120px]" : "h-14 px-5 text-sm gap-3.5 min-w-[240px]",
-  }[settings.overlay_size || "M"] || (isMinimal ? "h-10 px-3 gap-2.5 min-w-[100px]" : "h-12 px-4 text-xs gap-3 min-w-[200px]");
+    S: isMinimal ? "h-[32px] px-2.5 gap-2 min-w-[85px]" : "h-[38px] px-3 text-[11px] gap-2 min-w-[155px] max-w-[168px]",
+    M: isMinimal ? "h-[36px] px-3 gap-2 min-w-[95px]" : "h-[44px] px-3.5 text-xs gap-2.5 min-w-[195px] max-w-[208px]",
+    L: isMinimal ? "h-[40px] px-3.5 gap-2.5 min-w-[105px]" : "h-[48px] px-4 text-xs gap-3 min-w-[225px] max-w-[232px]",
+  }[settings.overlay_size || "M"] || (isMinimal ? "h-[36px] px-3 gap-2 min-w-[95px]" : "h-[44px] px-3.5 text-xs gap-2.5 min-w-[195px] max-w-[208px]");
 
   // Dimming opacity fraction
   const dimOpacity = (settings.dim_opacity_percent || 40) / 100;
 
   if (appState === "IDLE") {
+    if (!settings.ultra_minimal_mode) {
+      return null;
+    }
     // Ultra-minimal tiny dot when completely idle
     return (
-      <div className="h-screen w-screen flex items-center justify-center bg-transparent select-none p-2 pointer-events-none">
+      <div className="h-screen w-screen flex items-center justify-center bg-transparent select-none p-0 overflow-hidden pointer-events-none">
         <div className="h-2 w-2 rounded-full bg-primary/40" />
       </div>
     );
   }
 
   return (
-    <div className="h-screen w-screen flex items-center justify-center bg-transparent select-none p-2 pointer-events-none">
+    <div className="h-screen w-screen flex items-center justify-center bg-transparent select-none p-0 overflow-hidden pointer-events-none">
       <motion.div
-        initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, scale: 0.92, y: 4 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
+        initial={prefersReducedMotion ? { opacity: 1 } : { opacity: 0, scale: 0.92 }}
+        animate={{ opacity: 1, scale: 1 }}
         exit={{ opacity: 0, scale: 0.92 }}
         transition={{ duration: prefersReducedMotion ? 0.05 : 0.25 }}
         className={`relative flex items-center justify-between rounded-full border shadow-2xl transition-all duration-500 pixel-border ${sizeClasses}`}
         style={{
-          backgroundColor: `hsl(var(--background) / ${isDimmed ? dimOpacity : 0.88})`,
+          backgroundColor: `hsl(var(--card) / ${isDimmed ? dimOpacity : 0.88})`,
           borderColor: `hsl(var(--border) / ${isDimmed ? Math.min(1, dimOpacity * 1.6) : 0.85})`,
           backdropFilter: "blur(12px)",
         }}
@@ -175,12 +183,12 @@ export const OverlayView: React.FC = () => {
             />
           ) : appState === "INSERTING" ? (
             <span
-              className={`h-2.5 w-2.5 rounded-full bg-emerald-400 phosphor-glow ${
+              className={`h-2.5 w-2.5 rounded-full bg-primary phosphor-glow ${
                 prefersReducedMotion ? "" : "animate-pulse"
               }`}
             />
           ) : appState === "DONE" ? (
-            <Check className="h-3.5 w-3.5 text-emerald-400 stroke-[3] phosphor-glow" />
+            <Check className="h-3.5 w-3.5 text-primary stroke-[3] phosphor-glow" />
           ) : appState === "ERROR" ? (
             <AlertTriangle className="h-3.5 w-3.5 text-rose-500 glow-red" />
           ) : (
@@ -198,7 +206,7 @@ export const OverlayView: React.FC = () => {
                   : appState === "TRANSCRIBING"
                   ? "text-amber-400 glow-amber"
                   : appState === "INSERTING" || appState === "DONE"
-                  ? "text-emerald-400 phosphor-glow"
+                  ? "text-primary phosphor-glow"
                   : appState === "ERROR"
                   ? "text-rose-400"
                   : "text-foreground"

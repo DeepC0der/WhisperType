@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore, AppSettings } from "@/store/useAppStore";
+import { applyThemeToDocument } from "@/lib/theme";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -162,9 +163,12 @@ export const SettingsView: React.FC = () => {
   // Preview Overlay
   const handlePreviewOverlay = async () => {
     setIsPreviewingOverlay(true);
+    let emitFn: ((event: string, payload?: unknown) => Promise<void>) | null = null;
     if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
+        const { emit } = await import("@tauri-apps/api/event");
+        emitFn = emit;
         await invoke("position_overlay", { anchor: settings.overlay_position });
         await invoke("show_overlay");
       } catch {}
@@ -172,21 +176,27 @@ export const SettingsView: React.FC = () => {
 
     // Simulate overlay preview states with live simulated mic levels for waveform
     useAppStore.getState().setAppState("RECORDING");
+    if (emitFn) emitFn("state-changed", { current_state: "RECORDING" });
     let ticks = 0;
     const waveInterval = setInterval(() => {
       ticks++;
       const fakeLevel = 18 + Math.sin(ticks * 0.8) * 14 + Math.random() * 8;
       useAppStore.getState().setMicLevel(fakeLevel);
+      if (emitFn) emitFn("mic-level", fakeLevel);
     }, 100);
 
     setTimeout(() => {
       clearInterval(waveInterval);
       useAppStore.getState().setMicLevel(0);
+      if (emitFn) emitFn("mic-level", 0);
       useAppStore.getState().setAppState("TRANSCRIBING");
+      if (emitFn) emitFn("state-changed", { current_state: "TRANSCRIBING" });
       setTimeout(() => {
         useAppStore.getState().setAppState("DONE");
+        if (emitFn) emitFn("state-changed", { current_state: "DONE" });
         setTimeout(async () => {
           useAppStore.getState().setAppState("IDLE");
+          if (emitFn) emitFn("state-changed", { current_state: "IDLE" });
           if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
             try {
               const { invoke } = await import("@tauri-apps/api/core");
@@ -298,7 +308,11 @@ export const SettingsView: React.FC = () => {
                 </div>
                 <select
                   value={settings.theme || "dark"}
-                  onChange={(e) => saveSettings({ theme: e.target.value })}
+                  onChange={(e) => {
+                    const newTheme = e.target.value;
+                    applyThemeToDocument(newTheme);
+                    saveSettings({ theme: newTheme });
+                  }}
                   className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                 >
                   <option value="dark">Phosphor Green (Dark Default)</option>
@@ -948,7 +962,11 @@ export const SettingsView: React.FC = () => {
                 </div>
                 <select
                   value={settings.theme || "dark"}
-                  onChange={(e) => saveSettings({ theme: e.target.value })}
+                  onChange={(e) => {
+                    const newTheme = e.target.value;
+                    applyThemeToDocument(newTheme);
+                    saveSettings({ theme: newTheme });
+                  }}
                   className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
                 >
                   <option value="dark">Phosphor Green (Dark Default)</option>
