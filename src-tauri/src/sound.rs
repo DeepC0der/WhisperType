@@ -182,6 +182,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn test_mci_commands_playback_cycle() {
+        let _guard = MCI_MUTEX.lock().unwrap();
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
 
@@ -204,5 +205,45 @@ mod tests {
 
         let close_res = send_mci_cmd(&format!("close {alias}"));
         assert_eq!(close_res, Ok(()), "MCI close should succeed");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_mci_replay_lifecycle() {
+        let _guard = MCI_MUTEX.lock().unwrap();
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
+
+        let path_str = start_path.to_string_lossy();
+        let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
+        let alias = "murmur_test_replay";
+
+        let _ = send_mci_cmd(&format!("close {alias}"));
+        let open_res = send_mci_cmd(&format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#));
+        assert_eq!(open_res, Ok(()), "MCI open should succeed");
+
+        // Play 1
+        let play1 = send_mci_cmd(&format!("play {alias} from 0"));
+        assert_eq!(play1, Ok(()), "First play from 0 should succeed");
+
+        // Sleep briefly and re-trigger play from 0 while playing
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let play2 = send_mci_cmd(&format!("play {alias} from 0"));
+        assert_eq!(play2, Ok(()), "Replay from 0 while active should succeed");
+
+        // Stop
+        let stop = send_mci_cmd(&format!("stop {alias}"));
+        assert_eq!(stop, Ok(()), "Stop should succeed");
+
+        // Play after stop
+        let play3 = send_mci_cmd(&format!("play {alias} from 0"));
+        assert_eq!(play3, Ok(()), "Play from 0 after stop should succeed");
+
+        // Wait for it to play completely to EOF (~1.5s) and verify replay from 0 still works
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let play4 = send_mci_cmd(&format!("play {alias} from 0"));
+        assert_eq!(play4, Ok(()), "Play from 0 after reaching EOF should succeed");
+
+        let _ = send_mci_cmd(&format!("close {alias}"));
     }
 }
