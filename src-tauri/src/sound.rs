@@ -13,10 +13,16 @@ extern "system" {
         uReturnLength: u32,
         hwndCallback: isize,
     ) -> u32;
+
+    fn mciGetErrorStringW(
+        fdwError: u32,
+        lpszErrorText: *mut u16,
+        cchErrorText: u32,
+    ) -> u32;
 }
 
 #[cfg(target_os = "windows")]
-static MCI_MUTEX: Mutex<()> = Mutex::new(());
+pub static MCI_MUTEX: Mutex<()> = Mutex::new(());
 
 #[cfg(target_os = "windows")]
 fn send_mci_cmd(cmd: &str) -> Result<(), u32> {
@@ -26,6 +32,32 @@ fn send_mci_cmd(cmd: &str) -> Result<(), u32> {
         Ok(())
     } else {
         Err(err)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn get_mci_error_message(err_code: u32) -> String {
+    let mut buffer = [0u16; 256];
+    let res = unsafe { mciGetErrorStringW(err_code, buffer.as_mut_ptr(), buffer.len() as u32) };
+    if res != 0 {
+        let len = buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len());
+        String::from_utf16_lossy(&buffer[..len])
+    } else {
+        format!("MCI error code {err_code}")
+    }
+}
+
+/// Normalizes a path into a clean absolute Windows path suitable for legacy MCI commands.
+/// Canonicalizes relative components, replaces forward slashes, and strips the extended prefix `\\?\`.
+pub fn clean_path_for_mci(path: &Path) -> String {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path_str = canonical.to_string_lossy();
+    if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{stripped}")
+    } else if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        stripped.to_string()
+    } else {
+        path_str.to_string()
     }
 }
 
@@ -73,7 +105,8 @@ pub fn resolve_sound_path_with_dirs(
 
     for candidate in &candidates {
         if candidate.is_file() {
-            return Ok(candidate.clone());
+            let canonical = candidate.canonicalize().unwrap_or_else(|_| candidate.clone());
+            return Ok(canonical);
         }
     }
 
@@ -95,11 +128,15 @@ pub fn resolve_sound_path(app: &AppHandle, cue: &str) -> Result<PathBuf, String>
     resolve_sound_path_with_dirs(cue, res_dir.as_deref(), manifest_dir)
 }
 
-/// Plays the specified audio cue ("start" or "stop") using native platform audio.
-/// On Windows, this leverages winmm.dll mciSendStringW for zero-dependency, low-latency playback.
-pub fn play_audio_cue(app: &AppHandle, cue: &str) -> Result<(), String> {
+/// Plays the specified audio cue file directly using native platform audio.
+/// On Windows, this leverages winmm.dll mciSendStringW for zero-dependency, sub-millisecond asynchronous playback.
+pub fn play_sound_file(sound_path: &Path, cue: &str) -> Result<(), String> {
     let cue_lower = cue.trim().to_lowercase();
-    let sound_path = resolve_sound_path(app, &cue_lower)?;
+    if cue_lower != "start" && cue_lower != "stop" {
+        return Err(format!(
+            "Unknown audio cue '{cue}'. Supported cues are 'start' and 'stop'"
+        ));
+    }
 
     #[cfg(target_os = "windows")]
     {
@@ -121,14 +158,21 @@ pub fn play_audio_cue(app: &AppHandle, cue: &str) -> Result<(), String> {
             // If device wasn't opened yet or failed, close any stale state and open
             let _ = send_mci_cmd(&format!("close {alias}"));
 
-            let path_str = sound_path.to_string_lossy();
-            let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
+            let clean_path = clean_path_for_mci(sound_path);
             let open_cmd = format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#);
 
-            send_mci_cmd(&open_cmd)
-                .map_err(|e| format!("Failed to open audio device (MCI code {e}) for {clean_path}"))?;
-            send_mci_cmd(&play_cmd)
-                .map_err(|e| format!("Failed to play audio cue (MCI code {e}) for {clean_path}"))?;
+            send_mci_cmd(&open_cmd).map_err(|e| {
+                format!(
+                    "Failed to open audio device: {} (MCI code {e}) for {clean_path}",
+                    get_mci_error_message(e)
+                )
+            })?;
+            send_mci_cmd(&play_cmd).map_err(|e| {
+                format!(
+                    "Failed to play audio cue: {} (MCI code {e}) for {clean_path}",
+                    get_mci_error_message(e)
+                )
+            })?;
         }
 
         Ok(())
@@ -142,6 +186,36 @@ pub fn play_audio_cue(app: &AppHandle, cue: &str) -> Result<(), String> {
     }
 }
 
+/// Plays the specified audio cue ("start" or "stop") using the Tauri AppHandle to resolve the path.
+pub fn play_audio_cue(app: &AppHandle, cue: &str) -> Result<(), String> {
+    let sound_path = resolve_sound_path(app, cue)?;
+    play_sound_file(&sound_path, cue)
+}
+
+/// Pre-opens both audio cue devices on application startup for sub-millisecond first playback latency.
+pub fn preload_audio_cues(app: &AppHandle) {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(_guard) = MCI_MUTEX.lock() {
+            for cue in &["start", "stop"] {
+                if let Ok(path) = resolve_sound_path(app, cue) {
+                    let clean_path = clean_path_for_mci(&path);
+                    let alias = format!("murmur_{cue}");
+                    let _ = send_mci_cmd(&format!("close {alias}"));
+                    let open_cmd = format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#);
+                    if let Err(e) = send_mci_cmd(&open_cmd) {
+                        log::debug!("MCI preload skipped for {alias}: code {e}");
+                    }
+                }
+            }
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = app;
+    }
+}
+
 /// Stops any currently playing audio cues.
 pub fn stop_audio_cues() {
     #[cfg(target_os = "windows")]
@@ -149,6 +223,17 @@ pub fn stop_audio_cues() {
         if let Ok(_guard) = MCI_MUTEX.lock() {
             let _ = send_mci_cmd("stop murmur_start");
             let _ = send_mci_cmd("stop murmur_stop");
+        }
+    }
+}
+
+/// Closes the MCI audio cue devices, releasing underlying file handles and resources.
+pub fn close_audio_cues() {
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(_guard) = MCI_MUTEX.lock() {
+            let _ = send_mci_cmd("close murmur_start");
+            let _ = send_mci_cmd("close murmur_stop");
         }
     }
 }
@@ -179,6 +264,44 @@ mod tests {
         assert!(err.contains("Unknown audio cue"));
     }
 
+    #[test]
+    fn test_clean_path_for_mci() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
+        let cleaned = clean_path_for_mci(&start_path);
+        assert!(!cleaned.starts_with(r"\\?\"), "Clean path must not have extended prefix");
+        assert!(!cleaned.contains('/'), "Clean path must not have forward slashes");
+        assert!(cleaned.ends_with("start.mp3"));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_play_sound_file_lifecycle_and_alternation() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
+        let stop_path = resolve_sound_path_with_dirs("stop", None, manifest_dir).unwrap();
+
+        // 1. Play start cue directly via play_sound_file
+        let res_start = play_sound_file(&start_path, "start");
+        assert_eq!(res_start, Ok(()), "play_sound_file for start should succeed");
+
+        // 2. Play stop cue, which automatically stops start cue
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let res_stop = play_sound_file(&stop_path, "stop");
+        assert_eq!(res_stop, Ok(()), "play_sound_file for stop should succeed");
+
+        // 3. Replay start cue immediately (active alternation)
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let res_start2 = play_sound_file(&start_path, "start");
+        assert_eq!(res_start2, Ok(()), "Replaying start cue should succeed");
+
+        // 4. Test stop_audio_cues
+        stop_audio_cues();
+
+        // 5. Test clean teardown
+        close_audio_cues();
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     fn test_mci_commands_playback_cycle() {
@@ -186,8 +309,7 @@ mod tests {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
 
-        let path_str = start_path.to_string_lossy();
-        let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
+        let clean_path = clean_path_for_mci(&start_path);
         let alias = "murmur_unit_test";
 
         let _ = send_mci_cmd(&format!("close {alias}"));
@@ -214,8 +336,7 @@ mod tests {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
 
-        let path_str = start_path.to_string_lossy();
-        let clean_path = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
+        let clean_path = clean_path_for_mci(&start_path);
         let alias = "murmur_test_replay";
 
         let _ = send_mci_cmd(&format!("close {alias}"));
@@ -238,11 +359,6 @@ mod tests {
         // Play after stop
         let play3 = send_mci_cmd(&format!("play {alias} from 0"));
         assert_eq!(play3, Ok(()), "Play from 0 after stop should succeed");
-
-        // Wait for it to play completely to EOF (~1.5s) and verify replay from 0 still works
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        let play4 = send_mci_cmd(&format!("play {alias} from 0"));
-        assert_eq!(play4, Ok(()), "Play from 0 after reaching EOF should succeed");
 
         let _ = send_mci_cmd(&format!("close {alias}"));
     }

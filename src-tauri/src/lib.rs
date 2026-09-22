@@ -446,6 +446,22 @@ fn import_dictionary(
 }
 
 // ==========================================
+// SMART STRUCTURE PREVIEW IPC COMMAND
+// ==========================================
+
+#[tauri::command]
+fn apply_structure_preview(
+    text: String,
+    config: crate::asr::StructureConfig,
+) -> Result<crate::asr::StructureResult, String> {
+    if text.trim().is_empty() {
+        return Err("Input text is empty".to_string());
+    }
+    let word_spans = crate::asr::build_word_spans(&text, &[], None, None);
+    Ok(crate::asr::apply_smart_structure(&text, &word_spans, &config))
+}
+
+// ==========================================
 // DIAGNOSTICS & SYSTEM IPC COMMANDS
 // ==========================================
 
@@ -535,12 +551,9 @@ pub fn start_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
     }
 
     if settings.sound_effects_enabled {
-        let app_clone = app.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = crate::sound::play_audio_cue(&app_clone, "start") {
-                log::warn!("Failed to play start audio cue: {e}");
-            }
-        });
+        if let Err(e) = crate::sound::play_audio_cue(app, "start") {
+            log::warn!("Failed to play start audio cue: {e}");
+        }
     }
 
     Ok(())
@@ -560,12 +573,9 @@ pub fn stop_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
         Ok(captured) => {
             let settings = app.state::<SettingsManager>().get();
             if settings.sound_effects_enabled {
-                let app_clone = app.clone();
-                std::thread::spawn(move || {
-                    if let Err(e) = crate::sound::play_audio_cue(&app_clone, "stop") {
-                        log::warn!("Failed to play stop audio cue: {e}");
-                    }
-                });
+                if let Err(e) = crate::sound::play_audio_cue(app, "stop") {
+                    log::warn!("Failed to play stop audio cue: {e}");
+                }
             }
 
             let app_clone = app.clone();
@@ -606,9 +616,10 @@ pub fn stop_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
 
                     let post_cfg = PostProcessConfig::from(&settings);
                     let dict = db.get_dictionary().unwrap_or_default();
+                    let structure_cfg = crate::asr::StructureConfig::from(&settings);
 
-                    // 2. Transcribe samples (VAD trimming, Parakeet inference, chunking, postprocessing)
-                    match engine.transcribe_samples(&pcm, &post_cfg, &dict) {
+                    // 2. Transcribe samples (VAD trimming, Parakeet inference, chunking, postprocessing, smart structure)
+                    match engine.transcribe_samples(&pcm, &post_cfg, &dict, Some(&structure_cfg)) {
                         Ok(result) => {
                             if sm.get_state() != AppState::TRANSCRIBING {
                                 return;
@@ -920,6 +931,7 @@ pub fn run() {
             load_model,
             transcribe_audio_buffer,
             benchmark_model,
+            apply_structure_preview,
         ])
         .setup(move |app| {
             // Initialize System Tray
@@ -944,6 +956,9 @@ pub fn run() {
                 current_settings.hotkey_mode,
             );
             app.manage(hotkey_service);
+
+            // Preload audio cues for sub-millisecond initial playback
+            crate::sound::preload_audio_cues(app.handle());
 
             Ok(())
         })

@@ -6,6 +6,7 @@ use std::time::Instant;
 use thiserror::Error;
 
 use super::postprocess::{post_process, PostProcessConfig};
+use super::structure::{apply_smart_structure, build_word_spans, StructureConfig, WordSpan};
 use super::vad::{VadConfig, VadDecision, VadProcessor};
 use crate::storage::DictionaryRecord;
 
@@ -55,6 +56,12 @@ pub struct TranscriptionResult {
     pub rtf: f64,
     pub provider: String,
     pub discarded_silent: bool,
+    /// Per-word timing (may have `None` start/end if the model did not provide timestamps).
+    #[serde(default)]
+    pub word_spans: Vec<WordSpan>,
+    /// Smart Structure processing time in microseconds (0 if structure was disabled/skipped).
+    #[serde(default)]
+    pub structure_latency_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -344,11 +351,15 @@ impl AsrEngine {
     }
 
     /// Run full ASR and VAD transcription pipeline on 16,000 Hz mono PCM samples.
+    ///
+    /// Pass `structure_config` to apply the Smart Structure engine after post-processing.
+    /// When `structure_config` is `None` the pipeline is identical to before this feature.
     pub fn transcribe_samples(
         &self,
         samples: &[f32],
         postprocess_config: &PostProcessConfig,
         dictionary: &[DictionaryRecord],
+        structure_config: Option<&StructureConfig>,
     ) -> Result<TranscriptionResult, AsrError> {
         let total_audio_duration_ms = (samples.len() as f64 / 16000.0 * 1000.0) as u32;
 
@@ -365,6 +376,8 @@ impl AsrEngine {
                     rtf: 0.0,
                     provider: self.get_status().active_provider,
                     discarded_silent: true,
+                    word_spans: Vec::new(),
+                    structure_latency_us: 0,
                 });
             }
             VadDecision::SpeechChunks {
@@ -384,9 +397,12 @@ impl AsrEngine {
             }
         }
 
-        // 3. Perform sequential transcription of speech chunks
+        // 3. Perform sequential transcription of speech chunks.
+        //    Collect token-level timestamps alongside the text for Smart Structure.
         let t_start = Instant::now();
-        let mut raw_transcripts: Vec<String> = Vec::with_capacity(chunks.len());
+
+        type ChunkAsrOutput = (String, Vec<String>, Option<Vec<f32>>, Option<Vec<f32>>);
+        let mut chunk_results: Vec<ChunkAsrOutput> = Vec::with_capacity(chunks.len());
 
         let guard = self.inner.read().map_err(|_| AsrError::LockPoisoned)?;
         let recognizer = guard.recognizer.as_ref().ok_or_else(|| {
@@ -401,7 +417,7 @@ impl AsrEngine {
             if let Some(res) = stream.get_result() {
                 let text = res.text.trim().to_string();
                 if !text.is_empty() {
-                    raw_transcripts.push(text);
+                    chunk_results.push((text, res.tokens, res.timestamps, res.durations));
                 }
             }
         }
@@ -414,8 +430,51 @@ impl AsrEngine {
             write_guard.last_used = Some(Instant::now());
         }
 
-        let raw_text = raw_transcripts.join(" ");
-        let final_text = post_process(&raw_text, postprocess_config, dictionary);
+        // 4. Merge chunk transcripts and build flat word-span list.
+        let raw_text: String = chunk_results.iter().map(|(t, _, _, _)| t.as_str()).collect::<Vec<_>>().join(" ");
+
+        // Build word spans from the first (or only) chunk's token timestamps.
+        // For multi-chunk audio the word spans cover the joined text; pause-based
+        // structure detection works best on single-chunk dictations which is the
+        // common real-time case.
+        let word_spans: Vec<WordSpan> = if let Some((text, tokens, ts, durs)) = chunk_results.first() {
+            build_word_spans(
+                text,
+                tokens,
+                ts.as_deref(),
+                durs.as_deref(),
+            )
+        } else {
+            Vec::new()
+        };
+
+        // Log whether timestamps were available (once, at info level).
+        let has_timestamps = word_spans.iter().any(|w| w.start_s.is_some());
+        if !word_spans.is_empty() {
+            log::debug!(
+                "Word-level timestamps {}: {} spans",
+                if has_timestamps { "available" } else { "NOT available (None)" },
+                word_spans.len()
+            );
+        }
+
+        // 5. Post-processing (fillers, spoken commands, dictionary).
+        let post_processed = post_process(&raw_text, postprocess_config, dictionary);
+
+        // 6. Smart Structure (optional).
+        let (final_text, structure_latency_us) = match structure_config {
+            Some(cfg) if cfg.enabled => {
+                let sr = apply_smart_structure(&post_processed, &word_spans, cfg);
+                if sr.changed {
+                    log::info!(
+                        "SmartStructure applied in {}µs ({} chars, {} words)",
+                        sr.latency_us, sr.char_count, sr.word_count
+                    );
+                }
+                (sr.text, sr.latency_us)
+            }
+            _ => (post_processed, 0),
+        };
 
         let audio_duration_s = (speech_duration_ms as f64) / 1000.0;
         let rtf = if audio_duration_s > 0.001 {
@@ -438,6 +497,8 @@ impl AsrEngine {
             rtf,
             provider,
             discarded_silent: false,
+            word_spans,
+            structure_latency_us,
         })
     }
 
@@ -555,7 +616,7 @@ mod tests {
         let engine = AsrEngine::new("cpu", 0);
         let silence = vec![0.0f32; 16000 * 2];
         let cfg = PostProcessConfig::default();
-        let res = engine.transcribe_samples(&silence, &cfg, &[]);
+        let res = engine.transcribe_samples(&silence, &cfg, &[], None);
         assert!(res.is_ok());
         let tr = res.unwrap();
         assert!(tr.discarded_silent);
@@ -620,7 +681,7 @@ mod tests {
         long_audio.extend(vec![0.0f32; 16000 * 9]); // 9s silence
 
         let cfg = PostProcessConfig::default();
-        let res = engine.transcribe_samples(&long_audio, &cfg, &[]);
+        let res = engine.transcribe_samples(&long_audio, &cfg, &[], None);
         assert!(res.is_ok(), "Long audio transcription failed: {:?}", res.err());
         let tr = res.unwrap();
         assert!(!tr.discarded_silent);

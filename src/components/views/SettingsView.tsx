@@ -43,6 +43,43 @@ export const SettingsView: React.FC = () => {
   const [benchmarkResult, setBenchmarkResult] = useState<{ rtf: number; inference_ms: number } | null>(null);
   const [isPreviewingOverlay, setIsPreviewingOverlay] = useState(false);
   const [isPlayingAudioCue, setIsPlayingAudioCue] = useState(false);
+  const [previewRawText, setPreviewRawText] = useState(
+    "I need to do a few things first go to the shop second call my friend third finish my assignment"
+  );
+  const [previewStructuredText, setPreviewStructuredText] = useState<string | null>(null);
+  const [previewLatencyMs, setPreviewLatencyMs] = useState<number | null>(null);
+  const [previewWordCount, setPreviewWordCount] = useState<number | null>(null);
+  const [previewCharCount, setPreviewCharCount] = useState<number | null>(null);
+  const [isPreviewingStructure, setIsPreviewingStructure] = useState(false);
+
+  const handleTestSmartStructure = async () => {
+    setIsPreviewingStructure(true);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const config = {
+        enabled: true,
+        sentence_structure: settings.smart_sentence_structure,
+        auto_bullets: settings.smart_auto_bullets,
+        aggressiveness: settings.smart_aggressiveness || "balanced",
+        bullet_style: settings.smart_bullet_style || "bullet",
+      };
+      const res = await invoke<{
+        text: string;
+        changed: boolean;
+        latency_us: number;
+        word_count: number;
+        char_count: number;
+      }>("apply_structure_preview", { text: previewRawText, config });
+      setPreviewStructuredText(res.text);
+      setPreviewLatencyMs(Number((res.latency_us / 1000).toFixed(2)));
+      setPreviewWordCount(res.word_count);
+      setPreviewCharCount(res.char_count);
+    } catch (err) {
+      console.warn("apply_structure_preview error:", err);
+    } finally {
+      setIsPreviewingStructure(false);
+    }
+  };
 
   useEffect(() => {
     fetchSettings();
@@ -665,6 +702,180 @@ export const SettingsView: React.FC = () => {
                     onCheckedChange={(checked) => saveSettings({ add_trailing_space: checked })}
                   />
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Smart Structure Card */}
+          <Card className="border-border/70 bg-card pixel-border">
+            <CardContent className="p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    <h3 className="text-sm font-semibold">Smart Structure</h3>
+                    <Badge variant={settings.smart_structure_enabled ? "default" : "outline"} className="text-[10px] uppercase font-pixel tracking-wider">
+                      {settings.smart_structure_enabled ? "ACTIVE" : "OFF"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Structure continuous dictation into clean sentences, paragraphs, and bullet lists using speech pauses and discourse signals. Preserves original words, punctuation, and capitalization.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.smart_structure_enabled}
+                  onCheckedChange={(checked) => saveSettings({ smart_structure_enabled: checked })}
+                />
+              </div>
+
+              {settings.smart_structure_enabled && (
+                <div className="border-t border-border/50 pt-4 space-y-4">
+                  {/* Sentence / Thought Structure */}
+                  <div className="flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-medium">Sentence / Thought Structure</span>
+                      <p className="text-[11px] text-muted-foreground">
+                        Inserts paragraph breaks at natural thought transitions and pauses.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.smart_sentence_structure}
+                      onCheckedChange={(checked) => saveSettings({ smart_sentence_structure: checked })}
+                    />
+                  </div>
+
+                  {/* Auto Bullet Points */}
+                  <div className="flex items-center justify-between text-xs">
+                    <div>
+                      <span className="font-medium">Auto Bullet Points & Lists</span>
+                      <p className="text-[11px] text-muted-foreground">
+                        Detects spoken sequences (first, second, number one...) and formats them as lists.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={settings.smart_auto_bullets}
+                      onCheckedChange={(checked) => saveSettings({ smart_auto_bullets: checked })}
+                    />
+                  </div>
+
+                  {/* Structure Aggressiveness */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold">Structure Aggressiveness</span>
+                      <span className="font-mono text-primary text-[11px] uppercase">
+                        {settings.smart_aggressiveness || "balanced"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 text-xs">
+                      {[
+                        { id: "conservative", label: "Conservative", desc: "Requires strong pauses & multiple signals" },
+                        { id: "balanced", label: "Balanced", desc: "Default. Natural breaks & clear lists" },
+                        { id: "aggressive", label: "Aggressive", desc: "Separates sentences & clauses readily" },
+                      ].map((item) => (
+                        <div
+                          key={item.id}
+                          onClick={() => saveSettings({ smart_aggressiveness: item.id })}
+                          className={`p-2.5 rounded-lg border cursor-pointer transition-colors ${
+                            (settings.smart_aggressiveness || "balanced") === item.id
+                              ? "border-primary bg-primary/10 phosphor-glow-subtle"
+                              : "border-border/60 bg-secondary/30 hover:border-border"
+                          }`}
+                        >
+                          <span className="font-semibold block text-xs">{item.label}</span>
+                          <span className="text-[10px] text-muted-foreground block mt-0.5 leading-tight">{item.desc}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Bullet Style */}
+                  <div className="space-y-1.5 pt-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-semibold">Bullet List Style</span>
+                      <span className="font-mono text-primary text-[11px] uppercase">
+                        {settings.smart_bullet_style || "bullet"}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-4 gap-2 text-xs">
+                      {[
+                        { id: "bullet", label: "Bullet", symbol: "• Item" },
+                        { id: "dash", label: "Dash", symbol: "- Item" },
+                        { id: "asterisk", label: "Asterisk", symbol: "* Item" },
+                        { id: "numbered", label: "Numbered", symbol: "1. Item" },
+                      ].map((style) => (
+                        <div
+                          key={style.id}
+                          onClick={() => saveSettings({ smart_bullet_style: style.id })}
+                          className={`p-2 rounded-lg border cursor-pointer text-center transition-colors ${
+                            (settings.smart_bullet_style || "bullet") === style.id
+                              ? "border-primary bg-primary/10 phosphor-glow-subtle"
+                              : "border-border/60 bg-secondary/30 hover:border-border"
+                          }`}
+                        >
+                          <span className="font-mono text-xs block text-primary">{style.symbol}</span>
+                          <span className="text-[10px] text-muted-foreground block mt-0.5">{style.label}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Structure Preview / Test Surface */}
+              <div className="border-t border-border/50 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground font-pixel">
+                      Structure Preview & Testing
+                    </h4>
+                    <p className="text-[11px] text-muted-foreground">
+                      Test structuring algorithms on raw transcript text without speaking.
+                    </p>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTestSmartStructure}
+                    disabled={isPreviewingStructure || !previewRawText.trim()}
+                    className="h-7 px-3 text-xs font-pixel flex items-center gap-1.5 border-border/80 hover:border-primary/50"
+                  >
+                    <Play className={`h-3 w-3 text-primary ${isPreviewingStructure ? "animate-pulse" : ""}`} />
+                    <span>{isPreviewingStructure ? "Testing..." : "Apply Structure"}</span>
+                  </Button>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-[10px] font-mono uppercase text-muted-foreground">Raw Transcript Input:</label>
+                  <textarea
+                    rows={2}
+                    value={previewRawText}
+                    onChange={(e) => setPreviewRawText(e.target.value)}
+                    placeholder="Enter raw speech transcript..."
+                    className="w-full text-xs font-mono bg-secondary/40 border border-border/60 rounded-md p-2 resize-none focus:outline-none focus:border-primary text-foreground"
+                  />
+                </div>
+
+                {previewStructuredText !== null && (
+                  <div className="space-y-2 rounded-lg border border-border/60 bg-secondary/20 p-3">
+                    <div className="flex items-center justify-between text-[11px] font-mono">
+                      <span className="text-primary font-semibold">Structured Output:</span>
+                      <div className="flex items-center gap-3 text-muted-foreground text-[10px]">
+                        {previewLatencyMs !== null && (
+                          <span>Latency: <strong className="text-primary">{previewLatencyMs} ms</strong></span>
+                        )}
+                        {previewWordCount !== null && (
+                          <span>Words: <strong className="text-foreground">{previewWordCount}</strong></span>
+                        )}
+                        {previewCharCount !== null && (
+                          <span>Chars: <strong className="text-foreground">{previewCharCount}</strong></span>
+                        )}
+                      </div>
+                    </div>
+                    <pre className="text-xs font-mono whitespace-pre-wrap text-foreground bg-background/60 p-2.5 rounded border border-border/40">
+                      {previewStructuredText}
+                    </pre>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

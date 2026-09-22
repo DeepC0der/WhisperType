@@ -49,7 +49,7 @@ pub fn transcribe_audio_buffer(
 
     // 3. Transcribe with VAD and post-processing
     let result = engine
-        .transcribe_samples(&pcm_samples, &post_cfg, &dictionary_entries)
+        .transcribe_samples(&pcm_samples, &post_cfg, &dictionary_entries, None)
         .map_err(|e| e.to_string())?;
 
     // 4. Save to history if non-empty usable transcript was generated

@@ -169,7 +169,7 @@ fn test_audio_resample_flush_and_vad_pipeline() {
     // Check VAD on this resampled audio
     let engine = AsrEngine::new("cpu", 0);
     let post_cfg = PostProcessConfig::default();
-    let res = engine.transcribe_samples(&pcm_16k, &post_cfg, &[]);
+    let res = engine.transcribe_samples(&pcm_16k, &post_cfg, &[], None);
     assert!(res.is_ok());
     let tr = res.unwrap();
     // Audio had 1.0s tone; VAD should detect speech (not discarded as silent)

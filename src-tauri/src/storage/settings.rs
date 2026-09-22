@@ -93,6 +93,14 @@ fn default_fullscreen_behavior() -> String {
     "show".to_string()
 }
 
+fn default_smart_aggressiveness() -> String {
+    "balanced".to_string()
+}
+
+fn default_smart_bullet_style() -> String {
+    "bullet".to_string()
+}
+
 /// Strongly-typed application configuration with serde defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppSettings {
@@ -188,6 +196,28 @@ pub struct AppSettings {
 
     #[serde(default)]
     pub first_run_completed: bool,
+
+    // ── Smart Structure ──────────────────────────────────────────────────────
+    /// Master switch: when false the structure engine is bypassed entirely.
+    #[serde(default)]
+    pub smart_structure_enabled: bool,
+
+    /// Add paragraph breaks at sentence/thought boundaries.
+    #[serde(default = "default_true")]
+    pub smart_sentence_structure: bool,
+
+    /// Detect and format explicit ordinal lists as bullets/numbers.
+    #[serde(default = "default_true")]
+    pub smart_auto_bullets: bool,
+
+    /// How aggressively to introduce structural breaks.
+    /// Values: "conservative" | "balanced" | "aggressive".
+    #[serde(default = "default_smart_aggressiveness")]
+    pub smart_aggressiveness: String,
+
+    /// List bullet style. Values: "bullet" | "dash" | "asterisk" | "numbered".
+    #[serde(default = "default_smart_bullet_style")]
+    pub smart_bullet_style: String,
 }
 
 impl Default for AppSettings {
@@ -224,6 +254,11 @@ impl Default for AppSettings {
             brighten_on_speech: true,
             fullscreen_behavior: default_fullscreen_behavior(),
             first_run_completed: false,
+            smart_structure_enabled: false,
+            smart_sentence_structure: true,
+            smart_auto_bullets: true,
+            smart_aggressiveness: default_smart_aggressiveness(),
+            smart_bullet_style: default_smart_bullet_style(),
         }
     }
 }

@@ -37,6 +37,11 @@ export interface AppSettings {
   brighten_on_speech: boolean;
   fullscreen_behavior: string;
   first_run_completed: boolean;
+  smart_structure_enabled: boolean;
+  smart_sentence_structure: boolean;
+  smart_auto_bullets: boolean;
+  smart_aggressiveness: "conservative" | "balanced" | "aggressive" | string;
+  smart_bullet_style: "bullet" | "dash" | "asterisk" | "numbered" | string;
 }
 
 export interface HistoryRecord {
@@ -111,6 +116,11 @@ export const defaultSettings: AppSettings = {
   brighten_on_speech: true,
   fullscreen_behavior: "show",
   first_run_completed: false,
+  smart_structure_enabled: false,
+  smart_sentence_structure: true,
+  smart_auto_bullets: true,
+  smart_aggressiveness: "balanced",
+  smart_bullet_style: "bullet",
 };
 
 const isTauri = (): boolean =>
