@@ -42,6 +42,7 @@ export const SettingsView: React.FC = () => {
   const [isBenchmarking, setIsBenchmarking] = useState(false);
   const [benchmarkResult, setBenchmarkResult] = useState<{ rtf: number; inference_ms: number } | null>(null);
   const [isPreviewingOverlay, setIsPreviewingOverlay] = useState(false);
+  const [isPlayingAudioCue, setIsPlayingAudioCue] = useState(false);
 
   useEffect(() => {
     fetchSettings();
@@ -217,6 +218,32 @@ export const SettingsView: React.FC = () => {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("position_overlay", { anchor: pos });
       } catch {}
+    }
+  };
+
+  // Preview Start & Stop Audio Cues
+  const handleTestAudioCues = async () => {
+    if (isPlayingAudioCue) return;
+    setIsPlayingAudioCue(true);
+    try {
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("play_audio_cue", { cue: "start" });
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        await invoke("play_audio_cue", { cue: "stop" });
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      } else {
+        const startAudio = new Audio("/src/assets/sounds/start.mp3");
+        await startAudio.play().catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 650));
+        const stopAudio = new Audio("/src/assets/sounds/stop.mp3");
+        await stopAudio.play().catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 650));
+      }
+    } catch (err) {
+      console.error("Failed to test audio cues:", err);
+    } finally {
+      setIsPlayingAudioCue(false);
     }
   };
 
@@ -503,17 +530,29 @@ export const SettingsView: React.FC = () => {
               </div>
 
               {/* Audio feedback tone */}
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between gap-4">
                 <div>
                   <h3 className="text-sm font-semibold">Start & Stop Audio Cues</h3>
                   <p className="text-xs text-muted-foreground">
                     Play a subtle retro acoustic blip when dictation starts and stops.
                   </p>
                 </div>
-                <Switch
-                  checked={settings.sound_effects_enabled}
-                  onCheckedChange={(checked) => saveSettings({ sound_effects_enabled: checked })}
-                />
+                <div className="flex items-center space-x-3 shrink-0">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleTestAudioCues}
+                    disabled={isPlayingAudioCue}
+                    className="h-8 px-2.5 text-xs font-pixel flex items-center gap-1.5 border-border/80 hover:border-primary/50"
+                  >
+                    <Play className={`h-3 w-3 text-primary ${isPlayingAudioCue ? "animate-pulse" : ""}`} />
+                    <span>{isPlayingAudioCue ? "Testing..." : "Test Audio Cues"}</span>
+                  </Button>
+                  <Switch
+                    checked={settings.sound_effects_enabled}
+                    onCheckedChange={(checked) => saveSettings({ sound_effects_enabled: checked })}
+                  />
+                </div>
               </div>
             </CardContent>
           </Card>

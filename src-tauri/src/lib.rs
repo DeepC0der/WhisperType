@@ -3,6 +3,7 @@ pub mod audio;
 pub mod commands;
 pub mod logging;
 pub mod platform;
+pub mod sound;
 pub mod state;
 pub mod storage;
 pub mod tray;
@@ -246,6 +247,11 @@ fn cancel_recording(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 fn toggle_recording(app: AppHandle) -> Result<(), String> {
     toggle_dictation_pipeline(&app)
+}
+
+#[tauri::command]
+fn play_audio_cue(cue: String, app: AppHandle) -> Result<(), String> {
+    crate::sound::play_audio_cue(&app, &cue)
 }
 
 // ==========================================
@@ -527,6 +533,16 @@ pub fn start_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
         }
         return Err(e.to_string());
     }
+
+    if settings.sound_effects_enabled {
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = crate::sound::play_audio_cue(&app_clone, "start") {
+                log::warn!("Failed to play start audio cue: {e}");
+            }
+        });
+    }
+
     Ok(())
 }
 
@@ -542,6 +558,16 @@ pub fn stop_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
     let mut cap = capture_arc.lock().map_err(|_| "Audio capture lock poisoned".to_string())?;
     match cap.stop_recording() {
         Ok(captured) => {
+            let settings = app.state::<SettingsManager>().get();
+            if settings.sound_effects_enabled {
+                let app_clone = app.clone();
+                std::thread::spawn(move || {
+                    if let Err(e) = crate::sound::play_audio_cue(&app_clone, "stop") {
+                        log::warn!("Failed to play stop audio cue: {e}");
+                    }
+                });
+            }
+
             let app_clone = app.clone();
             std::thread::Builder::new()
                 .name("murmur-transcriber".to_string())
@@ -690,6 +716,8 @@ pub fn cancel_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
     sm.reset_to_idle();
     let _ = app.emit("state-changed", sm.get_snapshot());
     crate::tray::set_tray_recording_state(app, false);
+
+    crate::sound::stop_audio_cues();
 
     let capture_arc = app.state::<Arc<Mutex<AudioCapture>>>();
     if let Ok(mut cap) = capture_arc.lock() {
@@ -869,6 +897,7 @@ pub fn run() {
             stop_recording,
             cancel_recording,
             toggle_recording,
+            play_audio_cue,
             reinsert_text,
             update_history_entry,
             get_dictionary_entries,
