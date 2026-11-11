@@ -147,14 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Audio stats: RMS = {rms:.2}, Peak amplitude = {peak}");
 
     // Save to test.wav
-    let out_path = std::env::args().nth(1).unwrap_or_else(|| {
-        let root = std::path::Path::new(r"d:\Projects!@#\Murmur");
-        if root.exists() {
-            root.join("test.wav").to_string_lossy().to_string()
-        } else {
-            "test.wav".to_string()
-        }
-    });
+    let out_path = std::env::args().nth(1).unwrap_or_else(|| "test.wav".to_string());
     println!("4. Writing to {out_path}...");
     let mut writer = WavWriter::create(&out_path, wav_spec)?;
     for sample in &final_samples {

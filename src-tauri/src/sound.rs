@@ -25,14 +25,48 @@ extern "system" {
 pub static MCI_MUTEX: Mutex<()> = Mutex::new(());
 
 #[cfg(target_os = "windows")]
-fn send_mci_cmd(cmd: &str) -> Result<(), u32> {
-    let wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
-    let err = unsafe { mciSendStringW(wide.as_ptr(), std::ptr::null_mut(), 0, 0) };
-    if err == 0 {
-        Ok(())
-    } else {
-        Err(err)
+pub trait MciBackend: Send + Sync {
+    fn send_cmd(&self, cmd: &str) -> Result<(), u32>;
+}
+
+#[cfg(target_os = "windows")]
+pub struct RealMciBackend;
+
+#[cfg(target_os = "windows")]
+impl MciBackend for RealMciBackend {
+    fn send_cmd(&self, cmd: &str) -> Result<(), u32> {
+        let wide: Vec<u16> = cmd.encode_utf16().chain(std::iter::once(0)).collect();
+        let err = unsafe { mciSendStringW(wide.as_ptr(), std::ptr::null_mut(), 0, 0) };
+        if err == 0 {
+            Ok(())
+        } else {
+            Err(err)
+        }
     }
+}
+
+#[cfg(target_os = "windows")]
+static ACTIVE_MCI_BACKEND: Mutex<Option<Box<dyn MciBackend>>> = Mutex::new(None);
+
+#[cfg(target_os = "windows")]
+fn send_mci_cmd(cmd: &str) -> Result<(), u32> {
+    let custom = {
+        let guard = ACTIVE_MCI_BACKEND.lock().unwrap_or_else(|p| p.into_inner());
+        guard.as_ref().map(|_| ())
+    };
+    if custom.is_some() {
+        let guard = ACTIVE_MCI_BACKEND.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(ref backend) = *guard {
+            return backend.send_cmd(cmd);
+        }
+    }
+    RealMciBackend.send_cmd(cmd)
+}
+
+#[cfg(target_os = "windows")]
+pub fn set_test_mci_backend(backend: Option<Box<dyn MciBackend>>) {
+    let mut guard = ACTIVE_MCI_BACKEND.lock().unwrap_or_else(|p| p.into_inner());
+    *guard = backend;
 }
 
 #[cfg(target_os = "windows")]
@@ -140,7 +174,7 @@ pub fn play_sound_file(sound_path: &Path, cue: &str) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        let _guard = MCI_MUTEX.lock().map_err(|_| "MCI lock poisoned".to_string())?;
+        let _guard = MCI_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
 
         let alias = format!("murmur_{cue_lower}");
         let other_alias = if cue_lower == "start" {
@@ -196,16 +230,15 @@ pub fn play_audio_cue(app: &AppHandle, cue: &str) -> Result<(), String> {
 pub fn preload_audio_cues(app: &AppHandle) {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(_guard) = MCI_MUTEX.lock() {
-            for cue in &["start", "stop"] {
-                if let Ok(path) = resolve_sound_path(app, cue) {
-                    let clean_path = clean_path_for_mci(&path);
-                    let alias = format!("murmur_{cue}");
-                    let _ = send_mci_cmd(&format!("close {alias}"));
-                    let open_cmd = format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#);
-                    if let Err(e) = send_mci_cmd(&open_cmd) {
-                        log::debug!("MCI preload skipped for {alias}: code {e}");
-                    }
+        let _guard = MCI_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        for cue in &["start", "stop"] {
+            if let Ok(path) = resolve_sound_path(app, cue) {
+                let clean_path = clean_path_for_mci(&path);
+                let alias = format!("murmur_{cue}");
+                let _ = send_mci_cmd(&format!("close {alias}"));
+                let open_cmd = format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#);
+                if let Err(e) = send_mci_cmd(&open_cmd) {
+                    log::debug!("MCI preload skipped for {alias}: code {e}");
                 }
             }
         }
@@ -220,10 +253,9 @@ pub fn preload_audio_cues(app: &AppHandle) {
 pub fn stop_audio_cues() {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(_guard) = MCI_MUTEX.lock() {
-            let _ = send_mci_cmd("stop murmur_start");
-            let _ = send_mci_cmd("stop murmur_stop");
-        }
+        let _guard = MCI_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = send_mci_cmd("stop murmur_start");
+        let _ = send_mci_cmd("stop murmur_stop");
     }
 }
 
@@ -231,10 +263,9 @@ pub fn stop_audio_cues() {
 pub fn close_audio_cues() {
     #[cfg(target_os = "windows")]
     {
-        if let Ok(_guard) = MCI_MUTEX.lock() {
-            let _ = send_mci_cmd("close murmur_start");
-            let _ = send_mci_cmd("close murmur_stop");
-        }
+        let _guard = MCI_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let _ = send_mci_cmd("close murmur_start");
+        let _ = send_mci_cmd("close murmur_stop");
     }
 }
 
@@ -275,23 +306,84 @@ mod tests {
     }
 
     #[cfg(target_os = "windows")]
+    struct MockMciBackend {
+        commands: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        opened: std::sync::Arc<std::sync::Mutex<std::collections::HashSet<String>>>,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl MockMciBackend {
+        fn new(commands: std::sync::Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+            Self {
+                commands,
+                opened: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashSet::new())),
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl MciBackend for MockMciBackend {
+        fn send_cmd(&self, cmd: &str) -> Result<(), u32> {
+            self.commands.lock().unwrap().push(cmd.to_string());
+            let parts: Vec<&str> = cmd.split_whitespace().collect();
+            if parts.is_empty() {
+                return Ok(());
+            }
+            match parts[0] {
+                "open" => {
+                    if let Some(pos) = parts.iter().position(|&p| p == "alias") {
+                        if let Some(alias) = parts.get(pos + 1) {
+                            self.opened.lock().unwrap().insert(alias.to_string());
+                        }
+                    }
+                    Ok(())
+                }
+                "close" => {
+                    if let Some(alias) = parts.get(1) {
+                        self.opened.lock().unwrap().remove(*alias);
+                    }
+                    Ok(())
+                }
+                "play" => {
+                    if let Some(alias) = parts.get(1) {
+                        if self.opened.lock().unwrap().contains(*alias) {
+                            Ok(())
+                        } else {
+                            Err(263) // Device not open
+                        }
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Ok(()),
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    static TEST_SOUND_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(target_os = "windows")]
     #[test]
     fn test_play_sound_file_lifecycle_and_alternation() {
+        let _test_lock = TEST_SOUND_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mock = MockMciBackend::new(commands.clone());
+        set_test_mci_backend(Some(Box::new(mock)));
+
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
         let stop_path = resolve_sound_path_with_dirs("stop", None, manifest_dir).unwrap();
 
-        // 1. Play start cue directly via play_sound_file
+        // 1. Play start cue
         let res_start = play_sound_file(&start_path, "start");
         assert_eq!(res_start, Ok(()), "play_sound_file for start should succeed");
 
-        // 2. Play stop cue, which automatically stops start cue
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        // 2. Play stop cue, which stops start cue
         let res_stop = play_sound_file(&stop_path, "stop");
         assert_eq!(res_stop, Ok(()), "play_sound_file for stop should succeed");
 
         // 3. Replay start cue immediately (active alternation)
-        std::thread::sleep(std::time::Duration::from_millis(50));
         let res_start2 = play_sound_file(&start_path, "start");
         assert_eq!(res_start2, Ok(()), "Replaying start cue should succeed");
 
@@ -300,66 +392,68 @@ mod tests {
 
         // 5. Test clean teardown
         close_audio_cues();
+
+        set_test_mci_backend(None);
+
+        let history = commands.lock().unwrap().clone();
+        assert!(history.iter().any(|c| c.contains("open")));
+        assert!(history.iter().any(|c| c.contains("play murmur_start")));
+        assert!(history.iter().any(|c| c.contains("stop murmur_stop")));
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn test_mci_commands_playback_cycle() {
-        let _guard = MCI_MUTEX.lock().unwrap();
+        let _test_lock = TEST_SOUND_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mock = MockMciBackend::new(commands.clone());
+        set_test_mci_backend(Some(Box::new(mock)));
+
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
-
         let clean_path = clean_path_for_mci(&start_path);
         let alias = "murmur_unit_test";
 
         let _ = send_mci_cmd(&format!("close {alias}"));
-
         let open_res = send_mci_cmd(&format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#));
-        assert_eq!(open_res, Ok(()), "MCI open should succeed");
-
+        assert_eq!(open_res, Ok(()));
         let play_res = send_mci_cmd(&format!("play {alias} from 0"));
-        assert_eq!(play_res, Ok(()), "MCI play should succeed");
-
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
+        assert_eq!(play_res, Ok(()));
         let stop_res = send_mci_cmd(&format!("stop {alias}"));
-        assert_eq!(stop_res, Ok(()), "MCI stop should succeed");
-
+        assert_eq!(stop_res, Ok(()));
         let close_res = send_mci_cmd(&format!("close {alias}"));
-        assert_eq!(close_res, Ok(()), "MCI close should succeed");
+        assert_eq!(close_res, Ok(()));
+
+        set_test_mci_backend(None);
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn test_mci_replay_lifecycle() {
-        let _guard = MCI_MUTEX.lock().unwrap();
+        let _test_lock = TEST_SOUND_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
+        let commands = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mock = MockMciBackend::new(commands.clone());
+        set_test_mci_backend(Some(Box::new(mock)));
+
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let start_path = resolve_sound_path_with_dirs("start", None, manifest_dir).unwrap();
-
         let clean_path = clean_path_for_mci(&start_path);
         let alias = "murmur_test_replay";
 
         let _ = send_mci_cmd(&format!("close {alias}"));
         let open_res = send_mci_cmd(&format!(r#"open "{clean_path}" type mpegvideo alias {alias}"#));
-        assert_eq!(open_res, Ok(()), "MCI open should succeed");
+        assert_eq!(open_res, Ok(()));
 
-        // Play 1
         let play1 = send_mci_cmd(&format!("play {alias} from 0"));
-        assert_eq!(play1, Ok(()), "First play from 0 should succeed");
-
-        // Sleep briefly and re-trigger play from 0 while playing
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert_eq!(play1, Ok(()));
         let play2 = send_mci_cmd(&format!("play {alias} from 0"));
-        assert_eq!(play2, Ok(()), "Replay from 0 while active should succeed");
-
-        // Stop
+        assert_eq!(play2, Ok(()));
         let stop = send_mci_cmd(&format!("stop {alias}"));
-        assert_eq!(stop, Ok(()), "Stop should succeed");
-
-        // Play after stop
+        assert_eq!(stop, Ok(()));
         let play3 = send_mci_cmd(&format!("play {alias} from 0"));
-        assert_eq!(play3, Ok(()), "Play from 0 after stop should succeed");
-
+        assert_eq!(play3, Ok(()));
         let _ = send_mci_cmd(&format!("close {alias}"));
+
+        set_test_mci_backend(None);
     }
 }

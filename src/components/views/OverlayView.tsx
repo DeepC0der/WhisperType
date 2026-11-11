@@ -5,12 +5,27 @@ import { Sparkles, Check, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
 
 export const OverlayView: React.FC = () => {
-  const { appState, errorMessage, setAppState, micLevel, setMicLevel } = useAppStore();
+  const {
+    appState,
+    errorMessage,
+    setAppState,
+    micLevel,
+    setMicLevel,
+    activeDictationMode,
+    setActiveDictationMode,
+  } = useAppStore();
+  const isPro = activeDictationMode === "professional" || appState === "REFINING";
   const [seconds, setSeconds] = useState(0);
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
   const [isDimmed, setIsDimmed] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const lastSpeechTimeRef = useRef<number>(Date.now());
+  const animLevelRef = useRef(0);
+  const phaseRef = useRef(0);
+  const [displayLevel, setDisplayLevel] = useState(0);
+  const [animPhase, setAnimPhase] = useState(0);
+  const rafRef = useRef<number>(0);
+  const lastSetRef = useRef<number>(0);
 
   // Fetch initial settings & snapshot, and listen to Tauri events on mount
   useEffect(() => {
@@ -63,10 +78,15 @@ export const OverlayView: React.FC = () => {
             applyThemeToDocument(event.payload.theme || "dark");
           });
 
+          const unlistenMode = listen<"normal" | "professional">("dictation-mode-changed", (event) => {
+            setActiveDictationMode(event.payload);
+          });
+
           unlistenAll = () => {
             unlistenState.then((fn) => fn()).catch(() => {});
             unlistenMic.then((fn) => fn()).catch(() => {});
             unlistenSettings.then((fn) => fn()).catch(() => {});
+            unlistenMode.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});
@@ -76,6 +96,57 @@ export const OverlayView: React.FC = () => {
       if (unlistenAll) unlistenAll();
     };
   }, [setAppState, setMicLevel]);
+
+  // Auto self-healing reset: clear ERROR after 3 seconds
+  useEffect(() => {
+    if (appState !== "ERROR") return;
+    const timer = setTimeout(() => {
+      useAppStore.getState().setAppState("IDLE");
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        import("@tauri-apps/api/core").then(({ invoke }) => {
+          invoke("hide_overlay").catch(() => {});
+        });
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [appState]);
+
+  useEffect(() => {
+    if (appState !== "RECORDING") {
+      animLevelRef.current = 0;
+      phaseRef.current = 0;
+      setDisplayLevel(0);
+      setAnimPhase(0);
+      lastSetRef.current = 0;
+      return;
+    }
+    lastSetRef.current = Date.now();
+    const animate = () => {
+      // Perceptual square-root scale: sensitive to whispering & conversational speech, resting below 1.5 noise floor
+      const noiseFloor = 1.5;
+      const targetRaw =
+        micLevel > noiseFloor
+          ? Math.min(1, Math.sqrt((micLevel - noiseFloor) / 85.0))
+          : 0;
+      // Exponential moving average: fast attack (0.45), smooth release (0.15)
+      const attack = targetRaw > animLevelRef.current ? 0.45 : 0.15;
+      animLevelRef.current = animLevelRef.current * (1 - attack) + targetRaw * attack;
+
+      // Throttle React state updates to ~30fps max
+      const now = Date.now();
+      const elapsed = now - (lastSetRef.current || now);
+      if (elapsed >= 33) {
+        // Increment animation phase smoothly for organic per-bar motion
+        phaseRef.current += Math.min(elapsed / 1000, 0.1) * 7.5;
+        setDisplayLevel(animLevelRef.current);
+        setAnimPhase(phaseRef.current);
+        lastSetRef.current = now;
+      }
+      rafRef.current = requestAnimationFrame(animate);
+    };
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [appState, micLevel]);
 
   // Dedicated recording timer (only ticks during RECORDING, independent of mic events)
   useEffect(() => {
@@ -118,8 +189,8 @@ export const OverlayView: React.FC = () => {
   useEffect(() => {
     if (appState !== "RECORDING") return;
 
-    // micLevel is 0.0 - 100.0 from WASAPI RMS; speech is typically > 4.0
-    const isSpeaking = micLevel > 4.0;
+    // micLevel is 0.0 - 100.0 from WASAPI RMS; speech is detected above lowered noise floor 1.5
+    const isSpeaking = micLevel > 1.5;
     if (isSpeaking) {
       lastSpeechTimeRef.current = Date.now();
       if (settings.brighten_on_speech) {
@@ -128,13 +199,22 @@ export const OverlayView: React.FC = () => {
     }
   }, [micLevel, appState, settings.brighten_on_speech]);
 
-  // Size styling map
+  // Size styling map (+15-20% spacious across all presets)
   const isMinimal = settings.ultra_minimal_mode;
   const sizeClasses = {
-    S: isMinimal ? "h-[32px] px-2.5 gap-2 min-w-[85px]" : "h-[38px] px-3 text-[11px] gap-2 min-w-[155px] max-w-[168px]",
-    M: isMinimal ? "h-[36px] px-3 gap-2 min-w-[95px]" : "h-[44px] px-3.5 text-xs gap-2.5 min-w-[195px] max-w-[208px]",
-    L: isMinimal ? "h-[40px] px-3.5 gap-2.5 min-w-[105px]" : "h-[48px] px-4 text-xs gap-3 min-w-[225px] max-w-[232px]",
-  }[settings.overlay_size || "M"] || (isMinimal ? "h-[36px] px-3 gap-2 min-w-[95px]" : "h-[44px] px-3.5 text-xs gap-2.5 min-w-[195px] max-w-[208px]");
+    S: isMinimal
+      ? "h-[36px] px-3 gap-2.5 min-w-[95px]"
+      : "h-[45px] px-3.5 text-xs gap-2.5 min-w-[180px] max-w-[200px]",
+    M: isMinimal
+      ? "h-[42px] px-3.5 gap-2.5 min-w-[110px]"
+      : "h-[52px] px-4 text-[13px] gap-3 min-w-[230px] max-w-[252px]",
+    L: isMinimal
+      ? "h-[46px] px-4 gap-3 min-w-[125px]"
+      : "h-[58px] px-5 text-sm gap-3.5 min-w-[270px] max-w-[298px]",
+  }[settings.overlay_size || "M"] ||
+    (isMinimal
+      ? "h-[42px] px-3.5 gap-2.5 min-w-[110px]"
+      : "h-[52px] px-4 text-[13px] gap-3 min-w-[230px] max-w-[252px]");
 
   // Dimming opacity fraction
   const dimOpacity = (settings.dim_opacity_percent || 40) / 100;
@@ -143,10 +223,14 @@ export const OverlayView: React.FC = () => {
     if (!settings.ultra_minimal_mode) {
       return null;
     }
-    // Ultra-minimal tiny dot when completely idle
+    // Ultra-minimal tiny dot when completely idle (violet when Pro Mode is selected)
     return (
       <div className="h-screen w-screen flex items-center justify-center bg-transparent select-none p-0 overflow-hidden pointer-events-none">
-        <div className="h-2 w-2 rounded-full bg-primary/40" />
+        <div
+          className={`h-2.5 w-2.5 rounded-full transition-colors duration-300 ${
+            isPro ? "bg-status-refining/80 glow-refining" : "bg-primary/40"
+          }`}
+        />
       </div>
     );
   }
@@ -160,55 +244,117 @@ export const OverlayView: React.FC = () => {
         transition={{ duration: prefersReducedMotion ? 0.05 : 0.25 }}
         className={`relative flex items-center justify-between rounded-full border shadow-2xl transition-all duration-500 pixel-border ${sizeClasses}`}
         style={{
-          backgroundColor: `hsl(var(--card) / ${isDimmed ? dimOpacity : 0.88})`,
-          borderColor: `hsl(var(--border) / ${isDimmed ? Math.min(1, dimOpacity * 1.6) : 0.85})`,
+          backgroundColor: `hsl(var(--overlay-bg, var(--card)) / ${isDimmed ? dimOpacity : 0.9})`,
+          borderColor: isPro
+            ? `hsl(var(--status-refining) / ${isDimmed ? Math.min(1, dimOpacity * 1.6) : 0.9})`
+            : `hsl(var(--overlay-border, var(--border)) / ${isDimmed ? Math.min(1, dimOpacity * 1.6) : 0.85})`,
+          boxShadow: isPro && !isDimmed
+            ? "0 0 20px -2px hsl(var(--status-refining) / 0.45), 0 10px 25px -5px rgba(0, 0, 0, 0.5)"
+            : undefined,
           backdropFilter: "blur(12px)",
         }}
       >
         {/* Status Indicator & Label */}
         <div className="flex items-center space-x-2 shrink-0">
           {appState === "RECORDING" ? (
-            <div className="relative flex items-center justify-center shrink-0">
-              {!prefersReducedMotion && (
-                <span className="absolute h-3.5 w-3.5 rounded-full bg-red-500 animate-ping opacity-75" />
-              )}
-              {/* Red dot stays bright even when container is anti-distraction dimmed */}
-              <span className="h-2.5 w-2.5 rounded-full bg-red-500 glow-red opacity-100" />
-            </div>
+            settings.ultra_minimal_mode ? (
+              <div className="relative flex items-center justify-center shrink-0">
+                <svg
+                  width="20" height="20" viewBox="0 0 20 20"
+                  className={`absolute ${isPro ? "glow-refining" : "glow-recording"}`}
+                  style={{ overflow: 'visible' }}
+                >
+                  {/* Outer reactive ring */}
+                  <circle
+                    cx="10" cy="10"
+                    r={5.5 + displayLevel * 5.5}
+                    stroke={isPro ? "hsl(var(--status-refining))" : "hsl(var(--status-recording))"}
+                    strokeWidth={1.5 + displayLevel * 2}
+                    fill="none"
+                    opacity={0.45 + displayLevel * 0.55}
+                  />
+                  {/* Inner stable dot */}
+                  <circle
+                    cx="10"
+                    cy="10"
+                    r="4.5"
+                    fill={isPro ? "hsl(var(--status-refining))" : "hsl(var(--status-recording))"}
+                  />
+                </svg>
+              </div>
+            ) : (
+              <span
+                className={`h-2.5 w-2.5 rounded-full shrink-0 ${
+                  isPro ? "bg-status-refining glow-refining" : "bg-status-recording glow-recording"
+                }`}
+              />
+            )
+          ) : appState === "REFINING" ? (
+            <Sparkles
+              className={`h-4 w-4 glow-refining ${
+                prefersReducedMotion ? "" : "animate-pulse"
+              }`}
+              style={{ color: "hsl(var(--status-refining))" }}
+            />
           ) : appState === "TRANSCRIBING" ? (
             <Sparkles
-              className={`h-3.5 w-3.5 text-amber-400 glow-amber ${
+              className={`h-4 w-4 ${isPro ? "glow-refining" : "glow-transcribing"} ${
                 prefersReducedMotion ? "" : "animate-spin"
               }`}
+              style={{
+                color: isPro
+                  ? "hsl(var(--status-refining))"
+                  : "hsl(var(--status-transcribing))",
+              }}
             />
           ) : appState === "INSERTING" ? (
             <span
-              className={`h-2.5 w-2.5 rounded-full bg-primary phosphor-glow ${
-                prefersReducedMotion ? "" : "animate-pulse"
-              }`}
+              className={`h-3 w-3 rounded-full ${
+                isPro ? "bg-status-refining glow-refining" : "bg-primary phosphor-glow"
+              } ${prefersReducedMotion ? "" : "animate-pulse"}`}
             />
           ) : appState === "DONE" ? (
-            <Check className="h-3.5 w-3.5 text-primary stroke-[3] phosphor-glow" />
+            <Check
+              className={`h-4 w-4 stroke-[3] ${
+                isPro ? "text-status-refining glow-refining" : "text-primary phosphor-glow"
+              }`}
+            />
           ) : appState === "ERROR" ? (
-            <AlertTriangle className="h-3.5 w-3.5 text-rose-500 glow-red" />
+            <AlertTriangle
+              className="h-4 w-4 glow-error"
+              style={{ color: "hsl(var(--status-error))" }}
+            />
           ) : (
-            <span className="h-2 w-2 rounded-full bg-primary" />
+            <span className="h-2.5 w-2.5 rounded-full bg-primary" />
+          )}
+
+          {/* PRO Badge when Professional Mode is active (shown even in ultra-minimal mode so mode is unmistakable) */}
+          {isPro && (
+            <span
+              className={`font-pixel text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-status-refining/25 text-status-refining border border-status-refining/60 select-none ${
+                isDimmed && appState === "RECORDING" ? "opacity-50" : "opacity-100"
+              }`}
+            >
+              PRO
+            </span>
           )}
 
           {/* Retro Pixel Font Silkscreen Status Text */}
           {!settings.ultra_minimal_mode && (
             <span
-              className={`font-pixel tracking-wider uppercase select-none transition-opacity duration-500 ${
+              className={`font-pixel text-[12px] sm:text-[13px] font-bold tracking-widest uppercase select-none transition-opacity duration-500 phosphor-glow-subtle ${
                 isDimmed && appState === "RECORDING" ? "opacity-40" : "opacity-100"
               } ${
-                appState === "RECORDING"
-                  ? "text-red-400 glow-red"
+                appState === "ERROR"
+                  ? "text-status-error glow-error"
+                  : isPro
+                  ? "text-status-refining glow-refining"
+                  : appState === "RECORDING"
+                  ? "text-status-recording glow-recording"
                   : appState === "TRANSCRIBING"
-                  ? "text-amber-400 glow-amber"
+                  ? "text-status-transcribing glow-transcribing"
                   : appState === "INSERTING" || appState === "DONE"
                   ? "text-primary phosphor-glow"
-                  : appState === "ERROR"
-                  ? "text-rose-400"
                   : "text-foreground"
               }`}
             >
@@ -216,6 +362,8 @@ export const OverlayView: React.FC = () => {
                 ? "REC"
                 : appState === "TRANSCRIBING"
                 ? "TRANSCRIBING..."
+                : appState === "REFINING"
+                ? "AI NOTES..."
                 : appState === "INSERTING"
                 ? "INSERTING..."
                 : appState === "DONE"
@@ -227,27 +375,49 @@ export const OverlayView: React.FC = () => {
           )}
         </div>
 
-        {/* Dynamic Waveform (Calmer/thinner when dimmed, hidden in ultra-minimal) */}
+        {/* Dynamic Waveform Visualizer (9 vertical bars, organic voice motion, hidden in ultra-minimal) */}
         {appState === "RECORDING" && !settings.ultra_minimal_mode && (
           <div
-            className={`flex items-center space-x-1 h-3.5 px-1 transition-opacity duration-500 ${
+            className={`flex items-center gap-[3px] h-6 px-1.5 transition-opacity duration-500 ${
               isDimmed ? "opacity-40" : "opacity-100"
             }`}
           >
-            {[1, 2, 3, 4, 5].map((i) => {
-              const baseLevel = micLevel ? (micLevel > 1 ? micLevel / 100 : micLevel) : 0.15;
-              const rawHeight = Math.min(100, Math.max(15, baseLevel * 100 * (0.6 + i * 0.18)));
-              // Calmer and thinner waveform when anti-distraction dimmed
-              const finalHeight = isDimmed ? rawHeight * 0.45 : rawHeight;
+            {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => {
+              const restingHeights = [5, 7, 10, 13, 15, 13, 10, 7, 5];
+              let heightPx: number;
+
+              if (displayLevel > 0.02) {
+                // Symmetric center-weighted envelope (1.0 at center, tapering smoothly to ~0.45 at edges)
+                const distFromCenter = Math.abs(i - 4);
+                const envelope = 1 - (distFromCenter / 4) * 0.55;
+                // Organic per-bar sine wave modulation using the smooth animation phase
+                const wave = 0.65 + 0.35 * Math.sin(i * 0.9 + animPhase);
+                const dynamicH = 6 + 16 * Math.min(1, displayLevel * 1.2) * envelope * wave;
+                // Smooth transition blend from resting silhouette into active speech visualizer
+                const blend = Math.min(1, (displayLevel - 0.02) / 0.12);
+                const restingH = isDimmed
+                  ? Math.max(3, Math.round(restingHeights[i] * 0.65))
+                  : restingHeights[i];
+                heightPx = (1 - blend) * restingH + blend * dynamicH;
+                if (isDimmed) {
+                  heightPx = Math.max(4, heightPx * 0.65);
+                }
+              } else {
+                // Subtle varied resting wave silhouette when silent
+                heightPx = isDimmed
+                  ? Math.max(3, Math.round(restingHeights[i] * 0.65))
+                  : restingHeights[i];
+              }
 
               return (
                 <div
                   key={i}
-                  className={`bg-red-500 rounded-full transition-all duration-150 ${
-                    isDimmed ? "w-0.5 opacity-60" : "w-1 opacity-90 shadow-sm"
-                  }`}
+                  className="w-[3px] rounded-full transition-[height] duration-75 ease-out shrink-0"
                   style={{
-                    height: `${Math.max(15, finalHeight)}%`,
+                    height: `${Math.round(heightPx)}px`,
+                    backgroundColor: isPro
+                      ? "hsl(var(--status-refining))"
+                      : "hsl(var(--primary))",
                   }}
                 />
               );
@@ -257,7 +427,13 @@ export const OverlayView: React.FC = () => {
 
         {/* Timer readout (Always remains 100% crisp and bright) */}
         {appState === "RECORDING" && (
-          <div className="font-pixel text-[11px] font-bold tracking-widest text-red-400 bg-red-950/60 border border-red-500/40 px-1.5 py-0.5 rounded opacity-100 glow-red shrink-0 select-none">
+          <div
+            className={`font-pixel text-[12px] font-bold tracking-widest px-2 py-0.5 rounded opacity-100 shrink-0 select-none shadow-sm ${
+              isPro
+                ? "text-status-refining bg-status-refining/15 border border-status-refining/40 glow-refining"
+                : "text-status-recording bg-status-recording/15 border border-status-recording/40 glow-recording"
+            }`}
+          >
             {Math.floor(seconds / 60)
               .toString()
               .padStart(2, "0")}

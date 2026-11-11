@@ -1,8 +1,9 @@
 [package]
 name = "murmur"
 version = "0.1.0"
-description = "Murmur — Offline, privacy-first local dictation and voice command tool"
-authors = ["Murmur Team"]
+description = "WhisperType — Offline, privacy-first local dictation and voice command tool"
+authors = ["DeepC0der"]
+license = "MIT"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -11,7 +12,7 @@ name = "murmur_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2" }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
@@ -34,6 +35,9 @@ uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1.10"
 hound = "3.5"
 sherpa-onnx = { version = "1.13.8", default-features = false, features = ["shared"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait = "0.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.61", features = [
@@ -46,4 +50,5 @@ windows = { version = "0.61", features = [
     "Win32_System_Registry",
     "Win32_Graphics_Gdi",
     "Win32_UI_Shell",
+    "Win32_Security",
 ] }

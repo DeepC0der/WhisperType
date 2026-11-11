@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { applyThemeToDocument } from "@/lib/theme";
 
-export type StateKind = "IDLE" | "RECORDING" | "TRANSCRIBING" | "INSERTING" | "DONE" | "ERROR";
+export type StateKind = "IDLE" | "RECORDING" | "TRANSCRIBING" | "INSERTING" | "DONE" | "ERROR" | "REFINING";
 export type HotkeyMode = "hold-to-talk" | "toggle" | "hybrid";
 export type InsertionMode = "paste-with-restore" | "unicode-typing";
 
@@ -42,6 +42,22 @@ export interface AppSettings {
   smart_auto_bullets: boolean;
   smart_aggressiveness: "conservative" | "balanced" | "aggressive" | string;
   smart_bullet_style: "bullet" | "dash" | "asterisk" | "numbered" | string;
+  professional_mode_enabled: boolean;
+  professional_hotkey: string;
+  professional_hotkey_source: string;
+  professional_max_recording_seconds: number;
+  lm_studio_url: string;
+  lm_studio_model_id: string;
+  lm_studio_temperature: number;
+  lm_studio_timeout_seconds: number;
+  lm_studio_allow_remote: boolean;
+}
+
+export interface ModelValidationResult {
+  valid: boolean;
+  missing_files: string[];
+  resolved_path: string | null;
+  error_message: string | null;
 }
 
 export interface HistoryRecord {
@@ -54,6 +70,16 @@ export interface HistoryRecord {
   model_variant: string;
   provider: string;
   inference_ms: number;
+  refined_text?: string | null;
+  mode?: string | null;
+}
+
+export interface SavedRecordingInfo {
+  id: string;
+  file_name: string;
+  file_path: string;
+  size_bytes: number;
+  duration_seconds: number;
 }
 
 export interface DictionaryRecord {
@@ -74,6 +100,8 @@ export interface AudioDeviceInfo {
 export interface ModelStatus {
   status: { status: "not_loaded" | "loading" | "ready" | "error"; message?: string };
   active_provider: string;
+  requested_provider?: string;
+  thread_count?: number;
   model_variant: string;
   model_dir: string | null;
   idle_unload_minutes: number;
@@ -121,12 +149,21 @@ export const defaultSettings: AppSettings = {
   smart_auto_bullets: true,
   smart_aggressiveness: "balanced",
   smart_bullet_style: "bullet",
+  professional_mode_enabled: false,
+  professional_hotkey: "Ctrl+Win",
+  professional_hotkey_source: "keyboard",
+  professional_max_recording_seconds: 300,
+  lm_studio_url: "http://localhost:1234/v1",
+  lm_studio_model_id: "",
+  lm_studio_temperature: 0.2,
+  lm_studio_timeout_seconds: 90,
+  lm_studio_allow_remote: false,
 };
 
 const isTauri = (): boolean =>
   typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window);
 
-async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function invokeTauri<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) {
     const { invoke } = await import("@tauri-apps/api/core");
     return invoke<T>(cmd, args);
@@ -142,10 +179,15 @@ interface AppStore {
   micLevel: number;
   settings: AppSettings;
   history: HistoryRecord[];
+  recordings: SavedRecordingInfo[];
   dictionary: DictionaryRecord[];
   audioDevices: AudioDeviceInfo[];
   modelStatus: ModelStatus | null;
   showOnboarding: boolean;
+  professionalError: string | null;
+  availableLmModels: string[];
+  lastProfessionalTranscript: string;
+  activeDictationMode: "normal" | "professional";
 
   setAppState: (state: StateKind, error?: string | null) => void;
   setLastTranscript: (text: string) => void;
@@ -153,6 +195,8 @@ interface AppStore {
   setMicLevel: (level: number) => void;
   setShowOnboarding: (show: boolean) => void;
   applySettingsUpdate: (settings: AppSettings) => void;
+  setProfessionalError: (err: string | null) => void;
+  setActiveDictationMode: (mode: "normal" | "professional") => void;
 
   addSessionTranscript: (transcript: string) => void;
   fetchSettings: () => Promise<void>;
@@ -160,6 +204,9 @@ interface AppStore {
   fetchHistory: () => Promise<void>;
   deleteHistory: (id: string) => Promise<void>;
   clearAllHistory: () => Promise<void>;
+  fetchRecordings: () => Promise<void>;
+  deleteRecording: (id: string) => Promise<void>;
+  clearAllRecordings: () => Promise<void>;
   updateHistoryText: (id: string, text: string) => Promise<void>;
   reinsertHistory: (text: string) => Promise<void>;
   fetchDictionary: () => Promise<void>;
@@ -179,6 +226,14 @@ interface AppStore {
   stopRecording: () => Promise<void>;
   cancelRecording: () => Promise<void>;
   toggleRecording: () => Promise<void>;
+  startProfessionalRecording: () => Promise<void>;
+  stopProfessionalRecording: () => Promise<void>;
+  cancelProfessionalRecording: () => Promise<void>;
+  fetchLmStudioModels: () => Promise<void>;
+  testLmStudioConnection: () => Promise<boolean>;
+  validateModelPath: (path: string) => Promise<ModelValidationResult>;
+  importLocalModel: (sourceFolder: string) => Promise<string>;
+  getManagedModelPath: () => Promise<string>;
 }
 
 export const useAppStore = create<AppStore>((set, get) => ({
@@ -188,55 +243,77 @@ export const useAppStore = create<AppStore>((set, get) => ({
   recordingDuration: 0,
   micLevel: 0,
   settings: defaultSettings,
-  history: [
-    {
-      id: "demo-1",
-      raw_text: "Murmur is an offline privacy-first local dictation tool.",
-      final_text: "Murmur is an offline, privacy-first local dictation tool powered by sherpa-onnx and parakeet-tdt-0.6b.",
-      created_at: new Date().toISOString(),
-      duration_ms: 3200,
-      language: "en",
-      model_variant: "parakeet-tdt-0.6b-v3-int8",
-      provider: "cpu",
-      inference_ms: 210,
-    },
-  ],
-  dictionary: [
-    {
-      id: "dict-1",
-      find_text: "Murmer",
-      replace_text: "Murmur",
-      is_case_sensitive: false,
-      created_at: new Date().toISOString(),
-    },
-    {
-      id: "dict-2",
-      find_text: "rust lang",
-      replace_text: "Rust",
-      is_case_sensitive: false,
-      created_at: new Date().toISOString(),
-    },
-  ],
+  history: !isTauri()
+    ? [
+        {
+          id: "demo-1",
+          raw_text: "Murmur is an offline privacy-first local dictation tool.",
+          final_text:
+            "Murmur is an offline, privacy-first local dictation tool powered by sherpa-onnx and parakeet-tdt-0.6b.",
+          created_at: new Date().toISOString(),
+          duration_ms: 3200,
+          language: "en",
+          model_variant: "parakeet-tdt-0.6b-v3-int8",
+          provider: "cpu",
+          inference_ms: 210,
+        },
+      ]
+    : [],
+  recordings: [],
+  dictionary: !isTauri()
+    ? [
+        {
+          id: "dict-1",
+          find_text: "Murmer",
+          replace_text: "Murmur",
+          is_case_sensitive: false,
+          created_at: new Date().toISOString(),
+        },
+        {
+          id: "dict-2",
+          find_text: "rust lang",
+          replace_text: "Rust",
+          is_case_sensitive: false,
+          created_at: new Date().toISOString(),
+        },
+      ]
+    : [],
   audioDevices: [],
-  modelStatus: {
-    status: { status: "ready" },
-    active_provider: "cpu",
-    model_variant: "parakeet-tdt-0.6b-v3-int8",
-    model_dir: null,
-    idle_unload_minutes: 0,
-    seconds_since_last_use: null,
-    is_loaded: true,
-    is_loading: false,
-    provider: "cpu",
-    last_error: null,
-  },
+  modelStatus: !isTauri()
+    ? {
+        status: { status: "ready" },
+        active_provider: "cpu",
+        model_variant: "parakeet-tdt-0.6b-v3-int8",
+        model_dir: null,
+        idle_unload_minutes: 0,
+        seconds_since_last_use: null,
+        is_loaded: true,
+        is_loading: false,
+        provider: "cpu",
+        last_error: null,
+      }
+    : null,
   showOnboarding: false,
+  professionalError: null,
+  availableLmModels: [],
+  lastProfessionalTranscript: "",
+  activeDictationMode: "normal",
 
   setAppState: (appState, errorMessage = null) => set({ appState, errorMessage }),
   setLastTranscript: (lastTranscript) => set({ lastTranscript }),
   setRecordingDuration: (recordingDuration) => set({ recordingDuration }),
   setMicLevel: (micLevel) => set({ micLevel }),
   setShowOnboarding: (showOnboarding) => set({ showOnboarding }),
+  setProfessionalError: (professionalError) => set({ professionalError }),
+  setActiveDictationMode: (activeDictationMode) => {
+    if (get().activeDictationMode === activeDictationMode) return;
+    set({ activeDictationMode });
+    if (isTauri()) {
+      import("@tauri-apps/api/event")
+        .then(({ emit }) => emit("dictation-mode-changed", activeDictationMode))
+        .catch(() => {});
+    }
+  },
   applySettingsUpdate: (settings) => {
     set({ settings });
     applyThemeToDocument(settings.theme || "dark");
@@ -293,23 +370,56 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch {
       // Fallback
     }
+    get().fetchRecordings();
   },
 
   deleteHistory: async (id: string) => {
-    set((state) => ({ history: state.history.filter((h) => h.id !== id) }));
+    set((state) => ({
+      history: state.history.filter((h) => h.id !== id),
+      recordings: state.recordings.filter((r) => r.id !== id),
+    }));
     try {
       await invokeTauri("delete_history", { id });
     } catch (err) {
       console.warn("delete_history error:", err);
     }
+    get().fetchRecordings();
   },
 
   clearAllHistory: async () => {
-    set({ history: [] });
+    set({ history: [], recordings: [] });
     try {
       await invokeTauri("clear_history");
     } catch (err) {
       console.warn("clear_history error:", err);
+    }
+    get().fetchRecordings();
+  },
+
+  fetchRecordings: async () => {
+    try {
+      const list = await invokeTauri<SavedRecordingInfo[]>("list_recordings");
+      set({ recordings: list });
+    } catch {
+      // Fallback
+    }
+  },
+
+  deleteRecording: async (id: string) => {
+    set((state) => ({ recordings: state.recordings.filter((r) => r.id !== id) }));
+    try {
+      await invokeTauri("delete_recording", { id });
+    } catch (err) {
+      console.warn("delete_recording error:", err);
+    }
+  },
+
+  clearAllRecordings: async () => {
+    set({ recordings: [] });
+    try {
+      await invokeTauri("clear_recordings");
+    } catch (err) {
+      console.warn("clear_recordings error:", err);
     }
   },
 
@@ -453,7 +563,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await invokeTauri("start_recording");
     } catch (err) {
       console.warn("start_recording error:", err);
-      set({ appState: "RECORDING" });
+      if (!isTauri()) {
+        set({ appState: "RECORDING" });
+      } else {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
     }
   },
 
@@ -462,11 +576,15 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await invokeTauri("stop_recording");
     } catch (err) {
       console.warn("stop_recording error:", err);
-      set({ appState: "TRANSCRIBING" });
-      setTimeout(() => {
-        set({ appState: "DONE" });
-        setTimeout(() => set({ appState: "IDLE" }), 600);
-      }, 800);
+      if (!isTauri()) {
+        set({ appState: "TRANSCRIBING" });
+        setTimeout(() => {
+          set({ appState: "DONE" });
+          setTimeout(() => set({ appState: "IDLE" }), 600);
+        }, 800);
+      } else {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
     }
   },
 
@@ -475,7 +593,11 @@ export const useAppStore = create<AppStore>((set, get) => ({
       await invokeTauri("cancel_recording");
     } catch (err) {
       console.warn("cancel_recording error:", err);
-      set({ appState: "IDLE" });
+      if (!isTauri()) {
+        set({ appState: "IDLE" });
+      } else {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
     }
   },
 
@@ -486,5 +608,70 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } else if (current === "IDLE" || current === "ERROR") {
       await get().startRecording();
     }
+  },
+
+  startProfessionalRecording: async () => {
+    try {
+      await invokeTauri("start_professional_recording");
+    } catch (err) {
+      console.warn("start_professional_recording error:", err);
+      if (isTauri()) {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
+    }
+  },
+
+  stopProfessionalRecording: async () => {
+    try {
+      await invokeTauri("stop_professional_recording");
+    } catch (err) {
+      console.warn("stop_professional_recording error:", err);
+      if (isTauri()) {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
+    }
+  },
+
+  cancelProfessionalRecording: async () => {
+    try {
+      await invokeTauri("cancel_professional_recording");
+    } catch (err) {
+      console.warn("cancel_professional_recording error:", err);
+      if (isTauri()) {
+        set({ appState: "ERROR", errorMessage: String(err) });
+      }
+    }
+  },
+
+  fetchLmStudioModels: async () => {
+    try {
+      const models = await invokeTauri<string[]>("get_lm_studio_models");
+      set({ availableLmModels: models });
+    } catch {
+      set({ availableLmModels: [] });
+    }
+  },
+
+  testLmStudioConnection: async () => {
+    try {
+      const ok = await invokeTauri<boolean>("test_lm_studio_connection");
+      return ok;
+    } catch {
+      return false;
+    }
+  },
+
+  validateModelPath: async (path: string) => {
+    return await invokeTauri<ModelValidationResult>("validate_model_path", { path });
+  },
+
+  importLocalModel: async (sourceFolder: string) => {
+    const target = await invokeTauri<string>("import_local_model", { sourceFolder });
+    await get().fetchModelStatus();
+    return target;
+  },
+
+  getManagedModelPath: async () => {
+    return await invokeTauri<string>("get_managed_model_path");
   },
 }));

@@ -1,16 +1,16 @@
-# Murmur — Private, Real-Time Local Speech-to-Text for Windows
+# WhisperType — Private, Real-Time Local Speech-to-Text for Windows
 
 ```
-   __  ___                               
-  /  |/  /_ _________ _  __ _________    [ STATUS: OFFLINE ]
- / /|_/ / // / __/  ' \/ // / __/ _ \   [ MODEL:  PARAKEET-TDT INT8 ]
-/_/  /_/\_,_/_/ /_/_/_/\_,_/_/  \___/   [ LATENCY: ~70ms RTF 0.066 ]
-                                         [ PRIVACY: 100% AIR-GAPPED ]
+   _      ____    _                       _____                  
+  | | /| / / /_  (_)__ ___  ___ ____ ___ /_  __/_ _____  ___     [ STATUS: OFFLINE ]
+  | |/ |/ / _  \/ (_-</ _ \/ -_) __//___/ / / / // / _ \/ -_)    [ MODEL:  PARAKEET-TDT INT8 ]
+  |__/|__/_//_/_/___/ .__/\__/_/         /_/  \_, / .__/\__/     [ LATENCY: ~70ms RTF 0.066 ]
+                    /_/                      /___/_/             [ PRIVACY: 100% AIR-GAPPED ]
 ```
 
-**Murmur** is a high-performance, completely offline voice dictation desktop application for Windows. It provides global hold-to-talk, toggle, and hybrid speech-to-text with real-time waveform feedback and dual-mode text injection into any active desktop window.
+**WhisperType** is a high-performance, completely offline voice dictation desktop application for Windows. It provides global hold-to-talk, toggle, and hybrid speech-to-text with real-time waveform feedback and dual-mode text injection into any active desktop window.
 
-Powered by NVIDIA's Parakeet-TDT 0.6B model quantized to 8-bit integers via `sherpa-onnx`, Murmur delivers instantaneous transcription without sending a single byte of audio or text over the network.
+Powered by NVIDIA's Parakeet-TDT 0.6B model quantized to 8-bit integers via `sherpa-onnx`, WhisperType delivers instantaneous transcription without sending a single byte of audio or text over the network.
 
 ---
 
@@ -28,7 +28,7 @@ Powered by NVIDIA's Parakeet-TDT 0.6B model quantized to 8-bit integers via `she
 
 ## Architecture Overview
 
-Murmur combines a native Rust backend with a modern React frontend wrapped in Tauri 2:
+WhisperType combines a native Rust backend with a modern React frontend wrapped in Tauri 2:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -81,7 +81,7 @@ Murmur combines a native Rust backend with a modern React frontend wrapped in Ta
 
 ## Retro-Futuristic Pixel Aesthetic
 
-Murmur embraces an authentic retro-futuristic computing interface inspired by CRT military telemetry and vintage synth workstations:
+WhisperType embraces an authentic retro-futuristic computing interface inspired by CRT military telemetry and vintage synth workstations:
 
 - **Typography Balance:** Status badges, timers, audio levels, and diagnostic metrics use `@fontsource/silkscreen` (monospaced 8-bit pixel font). Dictation text and long-form transcripts use `@fontsource/inter` to guarantee effortless reading and editing.
 - **CRT Scanlines & Glow:** Subtle scanline overlays and phosphor glow accents (`#22c55e` emerald, `#06b6d4` cyan, `#f59e0b` amber) indicate pipeline states without blinding the user.
@@ -103,7 +103,7 @@ Murmur embraces an authentic retro-futuristic computing interface inspired by CR
 
 1. **Clone or navigate to the repository:**
    ```powershell
-   cd "d:\Projects!@#\Murmur"
+   cd "path\to\WhisperType"
    ```
 
 2. **Install frontend dependencies:**
@@ -133,7 +133,7 @@ Murmur embraces an authentic retro-futuristic computing interface inspired by CR
 
 ## Building Production Installers
 
-Murmur uses Tauri CLI to produce self-contained Windows installers. The installer bundles the required native dynamic libraries (`onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `sherpa-onnx-cxx-api.dll`) and is configured with `embedBootstrapper` to ensure that machines lacking Microsoft Edge WebView2 automatically acquire it during setup.
+WhisperType uses Tauri CLI to produce self-contained Windows installers. The installer bundles the required native dynamic libraries (`onnxruntime.dll`, `onnxruntime_providers_shared.dll`, `sherpa-onnx-c-api.dll`, `sherpa-onnx-cxx-api.dll`) and is configured with `embedBootstrapper` to ensure that machines lacking Microsoft Edge WebView2 automatically acquire it during setup.
 
 ### Build Command
 
@@ -146,15 +146,15 @@ npm run tauri build
 Upon completion, release installers are located in:
 - **NSIS Installer (`.exe`):**
   ```
-  src-tauri/target/release/bundle/nsis/Murmur_0.1.0_x64-setup.exe
+  src-tauri/target/release/bundle/nsis/WhisperType_0.1.0_x64-setup.exe
   ```
 - **MSI Installer (`.msi`):**
   ```
-  src-tauri/target/release/bundle/msi/Murmur_0.1.0_x64_en-US.msi
+  src-tauri/target/release/bundle/msi/WhisperType_0.1.0_x64_en-US.msi
   ```
 - **Standalone Binary:**
   ```
-  src-tauri/target/release/murmur.exe
+  src-tauri/target/release/whispertype.exe
   ```
 
 *Note on WiX Toolset:* Tauri CLI automatically resolves WiX v3.14 toolset binaries into `%LOCALAPPDATA%\tauri\WixTools314\` during the build process, enabling both NSIS (`.exe`) and WiX (`.msi`) installers to be compiled in a single `tauri build` invocation without requiring manual WiX installation or PATH modifications.
@@ -163,7 +163,7 @@ Upon completion, release installers are located in:
 
 ## Global Hotkey Usage
 
-Murmur monitors a system-wide hotkey using a dedicated Win32 low-level keyboard hook. The default hotkey is `Ctrl+Shift+Space`.
+WhisperType monitors a system-wide hotkey using a dedicated Win32 low-level keyboard hook. The default hotkey is `Ctrl+Shift+Space`.
 
 ### Hotkey Modes
 
@@ -234,7 +234,7 @@ Access settings via the main application window or right-click the system tray i
 
 ## Microphone Privacy Guide
 
-If Murmur cannot access your microphone, Windows privacy permissions may be blocking desktop apps:
+If WhisperType cannot access your microphone, Windows privacy permissions may be blocking desktop apps:
 
 1. Press `Win + R`, paste the following command, and hit Enter:
    ```powershell
@@ -242,7 +242,7 @@ If Murmur cannot access your microphone, Windows privacy permissions may be bloc
    ```
 2. Ensure **Microphone access** is toggled **On**.
 3. Scroll down to **Let desktop apps access your microphone** and ensure it is set to **On**.
-4. Restart Murmur. Use **Settings > Diagnostics > Copy Diagnostics Report** to inspect detected audio devices and system status.
+4. Restart WhisperType. Use **Settings > Diagnostics > Copy Diagnostics Report** to inspect detected audio devices and system status.
 
 ---
 
@@ -252,32 +252,29 @@ Windows implements **User Interface Privilege Isolation (UIPI)**. This security 
 
 - **Symptom:** You dictate text while an Administrator window is focused, but no text appears in the target input.
 - **Resolution:**
-  1. Either launch Murmur as Administrator (**Right-click Murmur > Run as administrator**), or
-  2. Simply click on Murmur's history view to copy the transcribed text with one click.
+  1. Either launch WhisperType as Administrator (**Right-click WhisperType > Run as administrator**), or
+  2. Simply click on WhisperType's history view to copy the transcribed text with one click.
 
 ---
 
 ## 100% Offline Privacy Guarantee
 
-Murmur was engineered from day one under strict zero-telemetry principles:
+WhisperType was engineered from day one under strict zero-telemetry principles:
 
-- **Zero Outbound Sockets:** The Murmur application binary opens no outbound network sockets, tracking pixels, or diagnostic beacons.
+- **Zero Outbound Sockets:** The WhisperType application binary opens no outbound network sockets, tracking pixels, or diagnostic beacons.
 - **Local Neural Inference:** All acoustic modeling, CTC decoding, and post-processing run strictly on local CPU/GPU hardware.
-- **Local Storage Only:** Transcription history, user dictionary rules, and settings are saved to a local SQLite database in `%APPDATA%\Murmur\murmur.db`.
+- **Local Storage Only:** Transcription history, user dictionary rules, and settings are saved to a local SQLite database in `%APPDATA%\Murmur\history.db`.
 - **Self-Contained Frontend:** All UI assets, icon sets, and web fonts (`Silkscreen`, `Inter`) are bundled inside the binary without external CDN links.
 
 ---
 
 ## Verification & Testing
 
-Murmur includes a comprehensive Rust and TypeScript test suite verifying the end-to-end audio pipeline, state machine, VAD thresholds, post-processing rules, and Win32 hooks:
+WhisperType includes a comprehensive hermetic Rust and TypeScript test suite verifying the end-to-end audio pipeline, state machine, VAD thresholds, post-processing rules, Win32 hooks, bounded audio capture, model resolution, autostart quoting, and cancellation safety:
 
 ```powershell
-# Run backend test suite (87 unit & integration tests)
-cargo test
-
-# Run Rust linter (0 warnings)
-cargo clippy --all-targets -- -D warnings
+# Run backend test suite (127 hermetic unit & integration tests)
+cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run frontend typecheck and production build
 npm run build
@@ -285,6 +282,45 @@ npm run build
 
 ---
 
-## License
+## Manual QA Checklist
 
-Murmur is licensed under the MIT License. Models are distributed under their respective open-source licenses (NVIDIA Parakeet license).
+Before deployment or daily personal use, execute the following short verification checklist:
+
+1. **Model Provisioning:**
+   - Launch WhisperType on a clean environment without models.
+   - Verify Onboarding Modal or Settings > Performance truthfully displays "MODEL NOT FOUND" without silently faking readiness.
+   - Import the model folder containing `encoder.int8.onnx`, `decoder.int8.onnx`, `joiner.int8.onnx`, and `tokens.txt` via "Validate & Import".
+   - Confirm status changes to `READY IN MEMORY` with the active path reported.
+2. **Normal Offline Dictation:**
+   - Press and hold `Ctrl+Shift+Space`.
+   - Verify HUD overlay appears within 50ms with live waveform animation.
+   - Speak a sentence (e.g., *"Testing local offline dictation comma with spoken punctuation period"*).
+   - Release hotkey: verify audio stops, transcribes, and injects text (`Testing local offline dictation, with spoken punctuation.`) into active input field.
+3. **Emergency Cancellation:**
+   - Start recording and press `Escape` mid-sentence.
+   - Verify capture stops immediately, overlay hides, and no text is injected.
+4. **Max Recording Duration Auto-Stop:**
+   - In Settings > Audio, set Max Recording Duration to 5 seconds.
+   - Toggle recording and remain silent or speak past 5 seconds.
+   - Verify recording automatically stops at 5 seconds and transcribes without hanging or leaking memory.
+5. **UIPI Target Diagnostics (Elevated App):**
+   - Open an elevated Administrator PowerShell window while running WhisperType non-elevated.
+   - Dictate into the elevated window.
+   - Verify WhisperType detects elevation, falls back to copying text to the clipboard, and reports UIPI diagnostic without leaving the state machine stuck.
+6. **Isolated Professional Mode:**
+   - Enable Professional Mode in Settings > Professional.
+   - Set LM Studio URL to default local loopback (`http://localhost:1234/v1`).
+   - Test connection against LM Studio.
+   - Enter an external remote IP (e.g., `http://192.168.1.50:1234/v1`): verify privacy warning appears and test is disabled until explicit remote confirmation checkbox is toggled.
+   - Disconnect LM Studio: verify dictation falls back safely to raw ASR transcript with zero crashes.
+
+---
+
+## License & Attributions
+
+WhisperType is licensed under the [MIT License](LICENSE) (c) 2026 DeepC0der.
+
+### Third-Party Model & Software Attributions
+
+- **NVIDIA Parakeet TDT 0.6B**: The speech recognition model [`nvidia/parakeet-tdt-0.6b-v3`](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) (`sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8`) developed by NVIDIA Corporation is licensed under the [Creative Commons Attribution 4.0 International (CC-BY-4.0)](https://creativecommons.org/licenses/by/4.0/) license.
+- **sherpa-onnx**: Offline speech recognition runtime engine by the sherpa-onnx authors is licensed under the [Apache License, Version 2.0 (Apache-2.0)](https://www.apache.org/licenses/LICENSE-2.0).

@@ -9,6 +9,8 @@ pub enum AppState {
     IDLE,
     RECORDING,
     TRANSCRIBING,
+    /// Professional Mode only: LLM refinement in progress (after Parakeet, before output injection).
+    REFINING,
     INSERTING,
     DONE,
     ERROR,
@@ -81,18 +83,23 @@ impl AppStateManager {
         let is_valid = match (cur, next) {
             // Can transition to ERROR from any state
             (_, AppState::ERROR) => true,
-            // Can transition to IDLE from ERROR, DONE, INSERTING, RECORDING (cancel), or TRANSCRIBING (silence / abort)
+            // Can transition to IDLE from ERROR, DONE, INSERTING, RECORDING (cancel), TRANSCRIBING (silence / abort), or REFINING (cancel / LLM failure)
             (AppState::ERROR, AppState::IDLE) => true,
             (AppState::DONE, AppState::IDLE) => true,
             (AppState::INSERTING, AppState::IDLE) => true,
             (AppState::RECORDING, AppState::IDLE) => true,
             (AppState::TRANSCRIBING, AppState::IDLE) => true,
+            (AppState::REFINING, AppState::IDLE) => true,
             // Normal forward flow
             (AppState::IDLE, AppState::RECORDING) => true,
             (AppState::RECORDING, AppState::TRANSCRIBING) => true,
             (AppState::TRANSCRIBING, AppState::INSERTING) => true,
             (AppState::TRANSCRIBING, AppState::DONE) => true, // When auto-insert is disabled
             (AppState::INSERTING, AppState::DONE) => true,
+            // Professional Mode: TRANSCRIBING -> REFINING -> INSERTING/DONE/IDLE
+            (AppState::TRANSCRIBING, AppState::REFINING) => true,
+            (AppState::REFINING, AppState::INSERTING) => true,
+            (AppState::REFINING, AppState::DONE) => true,
             // Idempotent re-entry
             (a, b) if a == b => true,
             _ => false,

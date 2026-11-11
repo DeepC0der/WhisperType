@@ -34,7 +34,7 @@ pub fn build_tray_menu(app: &AppHandle, is_recording: bool) -> Result<Menu<tauri
         "Start Dictation"
     };
     let start_stop = MenuItem::with_id(app, "toggle_dictation", dictation_label, true, None::<&str>)?;
-    let open_item = MenuItem::with_id(app, "open", "Open Murmur", true, None::<&str>)?;
+    let open_item = MenuItem::with_id(app, "open", "Open WhisperType", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     menu.append(&start_stop)?;

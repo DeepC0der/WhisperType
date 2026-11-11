@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -56,6 +56,34 @@ pub struct CapturedAudio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
     pub channels: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct CaptureConfig {
+    pub device_name: Option<String>,
+    pub max_recording_seconds: u32,
+    pub audio_gain_percent: u32,
+}
+
+impl Default for CaptureConfig {
+    fn default() -> Self {
+        Self {
+            device_name: None,
+            max_recording_seconds: 60,
+            audio_gain_percent: 100,
+        }
+    }
+}
+
+/// Apply validated audio gain with clipping protection to f32 samples.
+pub fn apply_audio_gain(samples: &mut [f32], gain_percent: u32) {
+    if gain_percent == 100 {
+        return;
+    }
+    let factor = (gain_percent as f32 / 100.0).clamp(0.0, 5.0);
+    for s in samples.iter_mut() {
+        *s = (*s * factor).clamp(-1.0, 1.0);
+    }
 }
 
 /// Check if an error message indicates Windows microphone privacy denial (0x80070005 / Access Denied).
@@ -169,10 +197,27 @@ impl AudioCapture {
         self.is_recording.load(Ordering::SeqCst)
     }
 
-    /// Start capturing audio. Buffers are allocated only during this session.
+    /// Start capturing audio with default configuration.
     pub fn start_recording(
         &mut self,
         device_name: Option<&str>,
+        app_handle: Option<AppHandle>,
+    ) -> Result<(), AudioError> {
+        self.start_recording_with_config(
+            CaptureConfig {
+                device_name: device_name.map(str::to_string),
+                max_recording_seconds: 60,
+                audio_gain_percent: 100,
+            },
+            app_handle,
+        )
+    }
+
+    /// Start capturing audio with explicit bounds (max recording seconds and gain).
+    /// Uses bounded channels and recycling buffers to guarantee strictly bounded memory usage.
+    pub fn start_recording_with_config(
+        &mut self,
+        config: CaptureConfig,
         app_handle: Option<AppHandle>,
     ) -> Result<(), AudioError> {
         if self.is_recording.load(Ordering::SeqCst) {
@@ -180,7 +225,7 @@ impl AudioCapture {
         }
 
         let host = cpal::default_host();
-        let device = resolve_input_device(&host, device_name)?;
+        let device = resolve_input_device(&host, config.device_name.as_deref())?;
 
         let default_config = match device.default_input_config() {
             Ok(c) => c,
@@ -197,9 +242,18 @@ impl AudioCapture {
         let channels = default_config.channels();
         let sample_format = default_config.sample_format();
 
-        // Lock-free unbounded channel from audio callback to collector thread
+        // Bounded channel to prevent unbounded memory growth if worker stalls
+        let channel_capacity = 256;
         let (audio_tx, audio_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) =
-            crossbeam_channel::unbounded();
+            crossbeam_channel::bounded(channel_capacity);
+        let (recycle_tx, recycle_rx): (Sender<Vec<f32>>, Receiver<Vec<f32>>) =
+            crossbeam_channel::bounded(channel_capacity);
+
+        // Pre-allocate recyclable buffers so the audio callback doesn't allocate fresh Vecs
+        for _ in 0..16 {
+            let _ = recycle_tx.try_send(Vec::with_capacity(1024));
+        }
+
         let (stop_tx, stop_rx) = crossbeam_channel::bounded::<()>(1);
 
         let err_fn = move |err: cpal::StreamError| {
@@ -208,14 +262,20 @@ impl AudioCapture {
 
         let stream_config: cpal::StreamConfig = default_config.into();
 
-        // Build CPAL input stream with lock-free callback
+        // Build CPAL input stream with non-blocking callback reusing recyclable buffers
         let stream = match sample_format {
             SampleFormat::F32 => {
                 let tx = audio_tx.clone();
+                let rx_recycle = recycle_rx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[f32], _| {
-                        let _ = tx.send(data.to_vec());
+                        let mut buf = rx_recycle
+                            .try_recv()
+                            .unwrap_or_else(|_| Vec::with_capacity(data.len()));
+                        buf.clear();
+                        buf.extend_from_slice(data);
+                        let _ = tx.try_send(buf);
                     },
                     err_fn,
                     None,
@@ -223,12 +283,16 @@ impl AudioCapture {
             }
             SampleFormat::I16 => {
                 let tx = audio_tx.clone();
+                let rx_recycle = recycle_rx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _| {
-                        let converted: Vec<f32> =
-                            data.iter().map(|&s| s as f32 / 32768.0).collect();
-                        let _ = tx.send(converted);
+                        let mut buf = rx_recycle
+                            .try_recv()
+                            .unwrap_or_else(|_| Vec::with_capacity(data.len()));
+                        buf.clear();
+                        buf.extend(data.iter().map(|&s| s as f32 / 32768.0));
+                        let _ = tx.try_send(buf);
                     },
                     err_fn,
                     None,
@@ -236,14 +300,19 @@ impl AudioCapture {
             }
             SampleFormat::U16 => {
                 let tx = audio_tx.clone();
+                let rx_recycle = recycle_rx.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[u16], _| {
-                        let converted: Vec<f32> = data
-                            .iter()
-                            .map(|&s| ((s as i32) - 32768) as f32 / 32768.0)
-                            .collect();
-                        let _ = tx.send(converted);
+                        let mut buf = rx_recycle
+                            .try_recv()
+                            .unwrap_or_else(|_| Vec::with_capacity(data.len()));
+                        buf.clear();
+                        buf.extend(
+                            data.iter()
+                                .map(|&s| ((s as i32) - 32768) as f32 / 32768.0),
+                        );
+                        let _ = tx.try_send(buf);
                     },
                     err_fn,
                     None,
@@ -270,39 +339,82 @@ impl AudioCapture {
 
         let is_recording_flag = Arc::clone(&self.is_recording);
 
-        // Spawn background audio collector and RMS computation thread (~30 Hz)
+        // Spawn bounded background audio collector and RMS computation thread (~30 Hz)
         let worker_handle = std::thread::spawn(move || {
-            let mut recorded_samples = Vec::<f32>::new();
-            let mut rms_window = Vec::<f32>::new();
+            let max_seconds = config.max_recording_seconds.clamp(5, 600) as usize;
+            let max_samples = sample_rate as usize * channels as usize * max_seconds;
+            let initial_capacity = (sample_rate as usize * channels as usize * 10).min(max_samples);
+
+            let mut recorded_samples = Vec::<f32>::with_capacity(initial_capacity);
+            let mut rms_window = Vec::<f32>::with_capacity(sample_rate as usize / 10);
             let mut last_rms_emit = Instant::now();
             let rms_interval = Duration::from_millis(33); // ~30 Hz
+            let gain_factor = (config.audio_gain_percent as f32 / 100.0).clamp(0.0, 5.0);
 
             loop {
                 // Check stop signal non-blockingly
                 if stop_rx.try_recv().is_ok() || !is_recording_flag.load(Ordering::SeqCst) {
-                    // Drain remaining samples in channel
                     while let Ok(chunk) = audio_rx.try_recv() {
-                        recorded_samples.extend_from_slice(&chunk);
+                        if recorded_samples.len() < max_samples {
+                            let remaining = max_samples - recorded_samples.len();
+                            let take = remaining.min(chunk.len());
+                            recorded_samples.extend_from_slice(&chunk[..take]);
+                        }
                     }
                     break;
                 }
 
-                // Wait for chunk with a short timeout to maintain 30 Hz RMS cadence even if stream is sparse
+                // Wait for chunk with short timeout to maintain 30 Hz RMS cadence
                 match audio_rx.recv_timeout(Duration::from_millis(15)) {
                     Ok(chunk) => {
-                        rms_window.extend_from_slice(&chunk);
-                        recorded_samples.extend_from_slice(&chunk);
+                        let remaining = max_samples.saturating_sub(recorded_samples.len());
+                        let take = remaining.min(chunk.len());
+                        if take > 0 {
+                            rms_window.extend_from_slice(&chunk[..take]);
+                            recorded_samples.extend_from_slice(&chunk[..take]);
+                        }
+
+                        // Stop automatically at max recording seconds to prevent unbounded memory growth
+                        if recorded_samples.len() >= max_samples {
+                            log::info!(
+                                "Maximum recording duration reached ({}s / {} samples). Halting capture and initiating graceful pipeline completion.",
+                                max_seconds,
+                                max_samples
+                            );
+                            is_recording_flag.store(false, Ordering::SeqCst);
+                            if let Some(ref handle) = app_handle {
+                                let _ = handle.emit("recording-max-duration-reached", max_seconds);
+                                let app_for_stop = handle.clone();
+                                std::thread::spawn(move || {
+                                    let ctrl = app_for_stop.state::<crate::dictation::DictationController>();
+                                    let _ = ctrl.stop(&app_for_stop);
+                                });
+                            }
+                            let mut rec = chunk;
+                            rec.clear();
+                            let _ = recycle_tx.try_send(rec);
+                            break;
+                        }
+
+                        let mut rec = chunk;
+                        rec.clear();
+                        let _ = recycle_tx.try_send(rec);
                     }
                     Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
                     Err(crossbeam_channel::RecvTimeoutError::Disconnected) => break,
                 }
 
-                // Periodic RMS computation and emission
+                // Periodic RMS computation and emission with audio gain scaling
                 if last_rms_emit.elapsed() >= rms_interval {
                     let level = if !rms_window.is_empty() {
-                        let sum_sq: f32 = rms_window.iter().map(|&s| s * s).sum();
+                        let sum_sq: f32 = rms_window
+                            .iter()
+                            .map(|&s| {
+                                let scaled = (s * gain_factor).clamp(-1.0, 1.0);
+                                scaled * scaled
+                            })
+                            .sum();
                         let rms = (sum_sq / rms_window.len() as f32).sqrt();
-                        // Scale RMS (0.0 .. 0.5 typical speech) to a 0.0 .. 100.0 UI level
                         (rms * 200.0).clamp(0.0, 100.0)
                     } else {
                         0.0
@@ -322,6 +434,9 @@ impl AudioCapture {
                 let _ = handle.emit("mic-level", 0.0);
             }
 
+            // Apply audio gain to the final recorded samples
+            apply_audio_gain(&mut recorded_samples, config.audio_gain_percent);
+
             Ok(CapturedAudio {
                 samples: recorded_samples,
                 sample_rate,
@@ -335,7 +450,8 @@ impl AudioCapture {
 
     /// Stop recording, release audio stream & buffer memory, and return captured audio.
     pub fn stop_recording(&mut self) -> Result<CapturedAudio, AudioError> {
-        if !self.is_recording.swap(false, Ordering::SeqCst) {
+        let was_recording = self.is_recording.swap(false, Ordering::SeqCst);
+        if !was_recording && self.worker_handle.is_none() {
             return Err(AudioError::NotRunning);
         }
 
@@ -419,5 +535,28 @@ mod tests {
         let host = cpal::default_host();
         let result = resolve_input_device(&host, Some("DefinitelyNonExistentMicrophone12345XYZ"));
         assert!(matches!(result, Err(AudioError::DeviceNotFound(_))));
+    }
+
+    #[test]
+    fn test_audio_gain_scaling_and_clipping() {
+        let mut samples = vec![0.1f32, -0.2f32, 0.7f32, -0.8f32];
+        apply_audio_gain(&mut samples, 200); // 200% = 2x gain
+        assert!((samples[0] - 0.2).abs() < 1e-6);
+        assert!((samples[1] - (-0.4)).abs() < 1e-6);
+        assert_eq!(samples[2], 1.0); // clipped at 1.0
+        assert_eq!(samples[3], -1.0); // clipped at -1.0
+
+        // 100% gain leaves samples unchanged
+        let mut unchanged = vec![0.5f32, -0.5f32];
+        apply_audio_gain(&mut unchanged, 100);
+        assert_eq!(unchanged, vec![0.5f32, -0.5f32]);
+    }
+
+    #[test]
+    fn test_capture_config_defaults() {
+        let cfg = CaptureConfig::default();
+        assert_eq!(cfg.max_recording_seconds, 60);
+        assert_eq!(cfg.audio_gain_percent, 100);
+        assert!(cfg.device_name.is_none());
     }
 }

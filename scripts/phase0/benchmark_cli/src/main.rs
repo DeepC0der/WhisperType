@@ -181,7 +181,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 1. Resolve model directory
     let default_model_dirs = [
-        PathBuf::from(r"d:\Projects!@#\Murmur\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"),
+        PathBuf::from("models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"),
+        PathBuf::from("../models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"),
         dirs_appdata(),
     ];
 
@@ -207,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Resolve test WAV file
     let default_wavs = [
         model_dir.join("test_wavs").join("en.wav"),
-        PathBuf::from(r"d:\Projects!@#\Murmur\test.wav"),
+        PathBuf::from("test.wav"),
     ];
 
     let mut wav_path = default_wavs[0].clone();
@@ -322,7 +323,7 @@ fn append_to_feasibility(
     results: &[BenchmarkResult],
     wav_path: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let feasibility_path = PathBuf::from(r"d:\Projects!@#\Murmur\FEASIBILITY.md");
+    let feasibility_path = PathBuf::from("FEASIBILITY.md");
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)

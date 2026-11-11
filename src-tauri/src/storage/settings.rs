@@ -101,8 +101,36 @@ fn default_smart_bullet_style() -> String {
     "bullet".to_string()
 }
 
+fn default_professional_hotkey() -> String {
+    "Ctrl+Win".to_string()
+}
+
+fn default_professional_hotkey_source() -> String {
+    "keyboard".to_string()
+}
+
+fn default_professional_max_recording_seconds() -> u32 {
+    300
+}
+
+fn default_lm_studio_url() -> String {
+    "http://localhost:1234/v1".to_string()
+}
+
+fn default_lm_studio_model_id() -> String {
+    "".to_string()
+}
+
+fn default_lm_studio_temperature() -> f32 {
+    0.2
+}
+
+fn default_lm_studio_timeout_seconds() -> u32 {
+    90
+}
+
 /// Strongly-typed application configuration with serde defaults.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppSettings {
     #[serde(default = "default_hotkey")]
     pub hotkey: String,
@@ -218,6 +246,44 @@ pub struct AppSettings {
     /// List bullet style. Values: "bullet" | "dash" | "asterisk" | "numbered".
     #[serde(default = "default_smart_bullet_style")]
     pub smart_bullet_style: String,
+
+    // ── Professional Mode ────────────────────────────────────────────────────
+    /// Master switch: when false, Professional Mode is unavailable.
+    #[serde(default)]
+    pub professional_mode_enabled: bool,
+
+    /// The hotkey string for Professional Mode (only used when source is "keyboard").
+    #[serde(default = "default_professional_hotkey")]
+    pub professional_hotkey: String,
+
+    /// Input source for Professional Mode: "keyboard" | "mouse4" | "mouse5".
+    #[serde(default = "default_professional_hotkey_source")]
+    pub professional_hotkey_source: String,
+
+    /// Maximum recording length in seconds for Professional Mode (defaults to 300s / 5 minutes).
+    #[serde(default = "default_professional_max_recording_seconds")]
+    pub professional_max_recording_seconds: u32,
+
+    // ── LM Studio ────────────────────────────────────────────────────────────
+    /// LM Studio OpenAI-compatible API base URL.
+    #[serde(default = "default_lm_studio_url")]
+    pub lm_studio_url: String,
+
+    /// Model ID to use with LM Studio. Empty string = auto-select first available model.
+    #[serde(default = "default_lm_studio_model_id")]
+    pub lm_studio_model_id: String,
+
+    /// Sampling temperature for LM Studio (0.0 = deterministic, 1.0 = creative).
+    #[serde(default = "default_lm_studio_temperature")]
+    pub lm_studio_temperature: f32,
+
+    /// HTTP request timeout in seconds for LM Studio requests.
+    #[serde(default = "default_lm_studio_timeout_seconds")]
+    pub lm_studio_timeout_seconds: u32,
+
+    /// Whether non-loopback LM Studio URLs are explicitly confirmed by the user.
+    #[serde(default)]
+    pub lm_studio_allow_remote: bool,
 }
 
 impl Default for AppSettings {
@@ -259,6 +325,15 @@ impl Default for AppSettings {
             smart_auto_bullets: true,
             smart_aggressiveness: default_smart_aggressiveness(),
             smart_bullet_style: default_smart_bullet_style(),
+            professional_mode_enabled: false,
+            professional_hotkey: default_professional_hotkey(),
+            professional_hotkey_source: default_professional_hotkey_source(),
+            professional_max_recording_seconds: default_professional_max_recording_seconds(),
+            lm_studio_url: default_lm_studio_url(),
+            lm_studio_model_id: default_lm_studio_model_id(),
+            lm_studio_temperature: default_lm_studio_temperature(),
+            lm_studio_timeout_seconds: default_lm_studio_timeout_seconds(),
+            lm_studio_allow_remote: false,
         }
     }
 }

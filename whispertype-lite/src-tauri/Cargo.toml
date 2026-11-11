@@ -1,0 +1,54 @@
+[package]
+name = "whispertype-lite"
+version = "0.1.0"
+description = "WhisperType Lite — Offline, privacy-first local dictation and voice command tool"
+authors = ["DeepC0der"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "murmur_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+log = "0.4"
+crossbeam-channel = "0.5"
+arboard = "3.6"
+cpal = "0.15"
+rubato = "0.15"
+rusqlite = { version = "0.32", features = ["bundled"] }
+directories = "5"
+tracing = "0.1"
+tracing-log = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1.10"
+hound = "3.5"
+sherpa-onnx = { version = "1.13.8", default-features = false, features = ["shared"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+async-trait = "0.1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Registry",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Shell",
+    "Win32_Security",
+] }

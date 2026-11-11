@@ -1,12 +1,14 @@
 {
-  "name": "murmur",
+  "name": "whispertype",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "test": "node --experimental-strip-types --test src/lib/theme.test.ts",
     "tauri": "tauri"
   },
   "dependencies": {

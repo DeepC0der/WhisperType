@@ -41,9 +41,11 @@ pub enum ModelLoadStatus {
 pub struct ModelStatus {
     pub status: ModelLoadStatus,
     pub active_provider: String,
+    pub requested_provider: String,
     pub model_variant: String,
     pub model_dir: Option<String>,
     pub idle_unload_minutes: u32,
+    pub thread_count: u32,
     pub seconds_since_last_use: Option<u64>,
 }
 
@@ -85,6 +87,7 @@ struct EngineInner {
     model_dir: Option<PathBuf>,
     last_used: Option<Instant>,
     idle_unload_minutes: u32,
+    thread_count: u32,
 }
 
 #[derive(Clone)]
@@ -95,6 +98,14 @@ pub struct AsrEngine {
 
 impl AsrEngine {
     pub fn new(requested_provider: &str, idle_unload_minutes: u32) -> Self {
+        Self::new_with_threads(requested_provider, idle_unload_minutes, 4)
+    }
+
+    pub fn new_with_threads(
+        requested_provider: &str,
+        idle_unload_minutes: u32,
+        thread_count: u32,
+    ) -> Self {
         let vad = Arc::new(VadProcessor::new(VadConfig::default()));
         let inner = EngineInner {
             recognizer: None,
@@ -105,6 +116,7 @@ impl AsrEngine {
             model_dir: None,
             last_used: None,
             idle_unload_minutes,
+            thread_count: thread_count.clamp(1, 16),
         };
 
         Self {
@@ -119,67 +131,12 @@ impl AsrEngine {
     /// - joiner.int8.onnx
     /// - tokens.txt
     pub fn find_model_directory() -> Result<PathBuf, AsrError> {
-        let mut candidate_dirs: Vec<PathBuf> = Vec::new();
-
-        // 1. Standard %APPDATA%\Murmur\models\parakeet-tdt-int8\
-        if let Ok(appdata) = std::env::var("APPDATA") {
-            candidate_dirs.push(PathBuf::from(appdata).join("Murmur").join("models").join("parakeet-tdt-int8"));
-        }
-        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "murmur", "Murmur") {
-            candidate_dirs.push(proj_dirs.data_dir().join("models").join("parakeet-tdt-int8"));
-        }
-
-        // 2. Cargo manifest directory (test / dev environment)
-        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
-            let manifest_path = PathBuf::from(manifest);
-            candidate_dirs.push(manifest_path.join("models").join("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-            candidate_dirs.push(manifest_path.join("../models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-            candidate_dirs.push(manifest_path.join("../models/parakeet-tdt-int8"));
-        }
-
-        // 3. Workspace / repository paths
-        candidate_dirs.push(PathBuf::from("models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-        candidate_dirs.push(PathBuf::from("../models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-        candidate_dirs.push(PathBuf::from("models/parakeet-tdt-int8"));
-        candidate_dirs.push(PathBuf::from("../models/parakeet-tdt-int8"));
-        candidate_dirs.push(PathBuf::from(r"d:\Projects!@#\Murmur\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-
-        // 4. Executable relative paths
-        if let Ok(current_exe) = std::env::current_exe() {
-            if let Some(exe_dir) = current_exe.parent() {
-                candidate_dirs.push(exe_dir.join("models").join("parakeet-tdt-int8"));
-                candidate_dirs.push(exe_dir.join("models").join("sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-                candidate_dirs.push(exe_dir.join("../../../models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"));
-            }
-        }
-
-        for dir in candidate_dirs.iter() {
-            if Self::validate_model_dir(dir) {
-                log::info!("Discovered ASR model artifacts in: {}", dir.display());
-                return Ok(dir.clone());
-            }
-        }
-
-        let tried = candidate_dirs
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        Err(AsrError::ModelNotFound(format!(
-            "Parakeet TDT int8 model files (encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx, tokens.txt) not found. Checked: [{tried}]"
-        )))
+        super::provision::resolve_model_directory().map_err(AsrError::ModelNotFound)
     }
 
     /// Check if directory contains all required Parakeet TDT ONNX model files.
     pub fn validate_model_dir(dir: &Path) -> bool {
-        if !dir.exists() {
-            return false;
-        }
-        dir.join("encoder.int8.onnx").exists()
-            && dir.join("decoder.int8.onnx").exists()
-            && dir.join("joiner.int8.onnx").exists()
-            && dir.join("tokens.txt").exists()
+        super::provision::validate_model_directory(dir).is_ok()
     }
 
     /// Background loading: spawn model loading on a dedicated thread so UI opens immediately.
@@ -218,9 +175,9 @@ impl AsrEngine {
         let joiner = model_dir.join("joiner.int8.onnx");
         let tokens = model_dir.join("tokens.txt");
 
-        let requested_provider = {
+        let (requested_provider, thread_count) = {
             let guard = self.inner.read().map_err(|_| AsrError::LockPoisoned)?;
-            guard.requested_provider.to_lowercase()
+            (guard.requested_provider.to_lowercase(), guard.thread_count)
         };
 
         // Determine fallback order based on requested provider
@@ -234,7 +191,7 @@ impl AsrEngine {
         let mut active_provider = "cpu".to_string();
 
         for provider in providers_to_try {
-            log::info!("Attempting to initialize sherpa-onnx with provider [{provider}]...");
+            log::info!("Attempting to initialize sherpa-onnx with provider [{provider}] and {thread_count} threads...");
             let mut config = OfflineRecognizerConfig::default();
             config.model_config.transducer = OfflineTransducerModelConfig {
                 encoder: Some(encoder.to_string_lossy().to_string()),
@@ -244,7 +201,7 @@ impl AsrEngine {
             config.model_config.tokens = Some(tokens.to_string_lossy().to_string());
             config.model_config.model_type = Some("nemo_transducer".to_string());
             config.model_config.provider = Some(provider.to_string());
-            config.model_config.num_threads = 4;
+            config.model_config.num_threads = thread_count.clamp(1, 16) as i32;
             config.model_config.debug = false;
 
             let t0 = Instant::now();
@@ -315,9 +272,11 @@ impl AsrEngine {
         ModelStatus {
             status: guard.status.clone(),
             active_provider: guard.active_provider.clone(),
+            requested_provider: guard.requested_provider.clone(),
             model_variant: guard.model_variant.clone(),
             model_dir: guard.model_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
             idle_unload_minutes: guard.idle_unload_minutes,
+            thread_count: guard.thread_count,
             seconds_since_last_use,
         }
     }
@@ -329,25 +288,32 @@ impl AsrEngine {
     }
 
     /// Update requested execution provider (cuda, directml, cpu).
-    /// If the model is already loaded and the provider changed, reloads the model.
-    pub fn set_requested_provider(&self, provider: &str) -> Result<(), AsrError> {
-        let (needs_reload, changed) = {
-            let mut guard = self.inner.write().map_err(|_| AsrError::LockPoisoned)?;
-            if guard.requested_provider.eq_ignore_ascii_case(provider) {
-                (false, false)
-            } else {
-                guard.requested_provider = provider.to_string();
-                (guard.status == ModelLoadStatus::Ready, true)
-            }
-        };
-
-        if needs_reload {
-            log::info!("ASR provider changed to [{provider}]. Reloading model...");
-            self.load_model()?;
-        } else if changed {
-            log::info!("ASR requested provider updated to [{provider}].");
+    /// Returns Ok(true) if the provider was changed and model is currently loaded (needs reload).
+    pub fn set_requested_provider(&self, provider: &str) -> Result<bool, AsrError> {
+        let mut guard = self.inner.write().map_err(|_| AsrError::LockPoisoned)?;
+        if guard.requested_provider.eq_ignore_ascii_case(provider) {
+            Ok(false)
+        } else {
+            guard.requested_provider = provider.to_string();
+            let needs_reload = guard.status == ModelLoadStatus::Ready;
+            log::info!("ASR requested provider updated to [{provider}]. Needs reload: {needs_reload}");
+            Ok(needs_reload)
         }
-        Ok(())
+    }
+
+    /// Update CPU execution threads count.
+    /// Returns Ok(true) if the thread count was changed and model is currently loaded (needs reload).
+    pub fn set_thread_count(&self, count: u32) -> Result<bool, AsrError> {
+        let valid_count = count.clamp(1, 16);
+        let mut guard = self.inner.write().map_err(|_| AsrError::LockPoisoned)?;
+        if guard.thread_count == valid_count {
+            Ok(false)
+        } else {
+            guard.thread_count = valid_count;
+            let needs_reload = guard.status == ModelLoadStatus::Ready;
+            log::info!("ASR thread count updated to [{valid_count}]. Needs reload: {needs_reload}");
+            Ok(needs_reload)
+        }
     }
 
     /// Run full ASR and VAD transcription pipeline on 16,000 Hz mono PCM samples.
@@ -536,7 +502,6 @@ impl AsrEngine {
         wav_candidates.push(PathBuf::from("models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
         wav_candidates.push(PathBuf::from("../models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/test_wavs/en.wav"));
         wav_candidates.push(PathBuf::from("test.wav"));
-        wav_candidates.push(PathBuf::from(r"d:\Projects!@#\Murmur\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\test_wavs\en.wav"));
 
         let test_wav = wav_candidates
             .into_iter()

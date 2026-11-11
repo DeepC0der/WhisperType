@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <title>WhisperType Lite</title>
+    <script>
+      (function() {
+        try {
+          var saved = localStorage.getItem("murmur_theme") || "dark";
+          var resolved = saved;
+          if (saved === "system") {
+            var darkMq = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+            resolved = darkMq && darkMq.matches ? "dark" : "light";
+          }
+          var valid = ["dark", "amber", "matrix", "cyan", "midnight", "light", "paper"];
+          if (valid.indexOf(resolved) === -1) {
+            resolved = "dark";
+          }
+          var isRetro = resolved === "amber" || resolved === "matrix" || resolved === "cyan";
+          var root = document.documentElement;
+          root.classList.remove("dark", "theme-dark", "theme-midnight", "theme-amber", "theme-matrix", "theme-cyan", "theme-light", "theme-paper");
+          var isLight = resolved === "light" || resolved === "paper";
+          var meta = document.querySelector('meta[name="color-scheme"]');
+          if (isLight) {
+            root.classList.add("theme-" + resolved);
+            root.style.colorScheme = "light";
+            if (meta) meta.setAttribute("content", saved === "system" ? "light dark" : "light");
+          } else {
+            root.classList.add("dark");
+            if (resolved !== "dark") {
+              root.classList.add("theme-" + resolved);
+            }
+            root.style.colorScheme = "dark";
+            if (meta) meta.setAttribute("content", saved === "system" ? "light dark" : "dark");
+          }
+          root.setAttribute("data-theme", resolved);
+          root.setAttribute("data-theme-setting", saved);
+          root.setAttribute("data-theme-style", isRetro ? "retro" : "matte");
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body class="text-foreground antialiased selection:bg-primary/20 selection:text-primary">
+    <div id="root"></div>
+    <script type="module" src="./src/main.tsx"></script>
+  </body>
+</html>

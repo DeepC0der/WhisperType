@@ -53,7 +53,7 @@ The ONNX export of `nvidia/parakeet-tdt-0.6b-v3` (`csukuangfj/sherpa-onnx-nemo-p
   - `joiner.int8.onnx`: 6,355,277 bytes
   - `tokens.txt`: 93,939 bytes
 - **Locations Installed:**
-  - Repo workspace: `d:\Projects!@#\Murmur\models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\`
+  - Repo workspace: `models\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8\`
   - Production AppData: `%APPDATA%\Murmur\models\parakeet-tdt-int8\`
 
 ---

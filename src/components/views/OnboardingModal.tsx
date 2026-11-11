@@ -22,10 +22,42 @@ export const OnboardingModal: React.FC = () => {
     modelStatus,
     micLevel,
     saveSettings,
+    validateModelPath,
+    importLocalModel,
+    fetchModelStatus,
   } = useAppStore();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [testedHotkey, setTestedHotkey] = useState(false);
+  const [modelImportPath, setModelImportPath] = useState("");
+  const [importingModel, setImportingModel] = useState(false);
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [modelSuccess, setModelSuccess] = useState<string | null>(null);
+
+  const isModelReady = modelStatus?.is_loaded || modelStatus?.status?.status === "ready";
+  const isModelLoading = modelStatus?.is_loading || modelStatus?.status?.status === "loading";
+
+  const handleImportModel = async () => {
+    if (!modelImportPath.trim()) return;
+    setImportingModel(true);
+    setModelError(null);
+    setModelSuccess(null);
+    try {
+      const val = await validateModelPath(modelImportPath.trim());
+      if (!val.valid) {
+        setModelError(val.error_message || `Missing required files: ${val.missing_files.join(", ")}`);
+        setImportingModel(false);
+        return;
+      }
+      const importedTo = await importLocalModel(modelImportPath.trim());
+      setModelSuccess(`Model imported successfully to ${importedTo}`);
+      await fetchModelStatus();
+    } catch (err) {
+      setModelError(String(err));
+    } finally {
+      setImportingModel(false);
+    }
+  };
 
   useEffect(() => {
     if (!showOnboarding) {
@@ -33,6 +65,34 @@ export const OnboardingModal: React.FC = () => {
       setTestedHotkey(false);
     }
   }, [showOnboarding]);
+
+  // Live microphone monitor probe in Step 2
+  useEffect(() => {
+    if (!showOnboarding || step !== 2) {
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        import("@tauri-apps/api/core").then(({ invoke }) => {
+          invoke("stop_mic_test").catch(() => {});
+        });
+      }
+      return;
+    }
+
+    if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+      import("@tauri-apps/api/core").then(({ invoke }) => {
+        invoke("start_mic_test", {
+          deviceName: settings.audio_device && settings.audio_device !== "default" ? settings.audio_device : null,
+        }).catch(() => {});
+      });
+    }
+
+    return () => {
+      if (typeof window !== "undefined" && "__TAURI_INTERNALS__" in window) {
+        import("@tauri-apps/api/core").then(({ invoke }) => {
+          invoke("stop_mic_test").catch(() => {});
+        });
+      }
+    };
+  }, [showOnboarding, step, settings.audio_device]);
 
   // Live hotkey test listener in Step 3
   useEffect(() => {
@@ -74,7 +134,11 @@ export const OnboardingModal: React.FC = () => {
   };
 
   const hotkeyTokens = (settings.hotkey || "Ctrl+Shift+Space").split("+");
-  const normalizedMicLevel = Math.min(100, Math.max(0, micLevel > 1 ? micLevel : micLevel * 100));
+  // Perceptual non-linear scaling for natural conversational speech visibility
+  const normalizedMicLevel =
+    micLevel <= 1.5
+      ? 0
+      : Math.min(100, Math.sqrt((micLevel - 1.5) / 85.0) * 100);
 
   return (
     <div
@@ -92,7 +156,7 @@ export const OnboardingModal: React.FC = () => {
             </div>
             <div>
               <h2 id="onboarding-title" className="text-sm font-pixel font-bold tracking-wider text-foreground">
-                WELCOME TO MURMUR
+                WELCOME TO WHISPERTYPE
               </h2>
               <p className="text-[11px] text-muted-foreground">Step {step} of 3 • Quick Setup</p>
             </div>
@@ -120,7 +184,13 @@ export const OnboardingModal: React.FC = () => {
             <div className="flex items-center space-x-3 p-3 rounded-lg bg-secondary/50 border border-border/60">
               <Cpu className="h-8 w-8 text-primary shrink-0" />
               <div>
-                <h3 className="text-sm font-semibold text-foreground">Offline Speech Model Verified</h3>
+                <h3 className="text-sm font-semibold text-foreground">
+                  {isModelReady
+                    ? "Offline Speech Model Verified"
+                    : isModelLoading
+                    ? "Loading Offline Model..."
+                    : "Local Speech Model Setup"}
+                </h3>
                 <p className="text-xs text-muted-foreground">
                   Running NVIDIA Parakeet TDT 0.6B quantized to Int8.
                 </p>
@@ -133,27 +203,90 @@ export const OnboardingModal: React.FC = () => {
                 <span className="font-semibold">Zero-Cloud, Complete Privacy Guarantee</span>
               </div>
               <p>
-                All acoustic processing and transcription happens entirely in memory on your CPU or GPU.
-                Murmur makes zero network requests. No audio is ever uploaded to external servers.
+                All acoustic processing and transcription happens entirely in memory on your CPU.
+                WhisperType makes zero network requests. No audio is ever uploaded to external servers.
               </p>
             </div>
 
-            <div className="p-3 rounded-lg border border-border/50 bg-secondary/30 text-xs space-y-1">
+            <div className="p-3 rounded-lg border border-border/50 bg-secondary/30 text-xs space-y-1.5">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Model Variant:</span>
                 <span className="font-mono text-foreground font-medium">parakeet-tdt-0.6b-v3-int8</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Status:</span>
-                <span className="font-mono text-emerald-400 font-semibold">
-                  {modelStatus?.is_loaded || modelStatus?.status?.status === "ready"
+                <span
+                  className={`font-mono font-semibold ${
+                    isModelReady
+                      ? "text-emerald-400"
+                      : isModelLoading
+                      ? "text-amber-400"
+                      : "text-rose-400"
+                  }`}
+                >
+                  {isModelReady
                     ? "READY IN MEMORY"
-                    : "LOADING..."}
+                    : isModelLoading
+                    ? "LOADING..."
+                    : "MODEL NOT FOUND"}
                 </span>
               </div>
+              {modelStatus?.model_dir && (
+                <div className="flex justify-between text-[11px] text-muted-foreground truncate pt-1 border-t border-border/40">
+                  <span>Location:</span>
+                  <span className="font-mono truncate max-w-[260px]">{modelStatus.model_dir}</span>
+                </div>
+              )}
             </div>
 
-            <div className="flex justify-end pt-2">
+            {/* Model Import Flow when model is not ready */}
+            {!isModelReady && (
+              <div className="p-3 rounded-lg border border-border/70 bg-card space-y-2 text-xs">
+                <span className="font-semibold block text-foreground">
+                  Import Model Folder
+                </span>
+                <p className="text-muted-foreground text-[11px]">
+                  Select the folder containing <code className="bg-secondary px-1 rounded">encoder.int8.onnx</code>,{" "}
+                  <code className="bg-secondary px-1 rounded">decoder.int8.onnx</code>,{" "}
+                  <code className="bg-secondary px-1 rounded">joiner.int8.onnx</code>, and{" "}
+                  <code className="bg-secondary px-1 rounded">tokens.txt</code>.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={modelImportPath}
+                    onChange={(e) => setModelImportPath(e.target.value)}
+                    placeholder="e.g. C:\Downloads\sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8"
+                    className="flex-1 px-2.5 py-1.5 rounded text-xs bg-secondary border border-border focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                  />
+                  <Button
+                    size="sm"
+                    variant="pixel"
+                    onClick={handleImportModel}
+                    disabled={importingModel || !modelImportPath.trim()}
+                    className="text-xs shrink-0 font-pixel h-8"
+                  >
+                    {importingModel ? "Importing..." : "Validate & Import"}
+                  </Button>
+                </div>
+                {modelError && (
+                  <p className="text-[11px] text-rose-400 font-medium">{modelError}</p>
+                )}
+                {modelSuccess && (
+                  <p className="text-[11px] text-emerald-400 font-medium">{modelSuccess}</p>
+                )}
+              </div>
+            )}
+
+            <div className="flex justify-between items-center pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => fetchModelStatus()}
+                className="text-xs font-pixel h-9"
+              >
+                Refresh Status
+              </Button>
               <Button
                 variant="pixel"
                 size="sm"
@@ -253,7 +386,7 @@ export const OnboardingModal: React.FC = () => {
               <div>
                 <h3 className="text-sm font-semibold text-foreground">Interactive Hotkey Test</h3>
                 <p className="text-xs text-muted-foreground">
-                  Try triggering Murmur using your configured global shortcut.
+                  Try triggering WhisperType using your configured global shortcut.
                 </p>
               </div>
             </div>

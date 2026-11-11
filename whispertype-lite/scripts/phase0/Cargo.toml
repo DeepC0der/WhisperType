@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "hotkey_proof",
+    "inject_proof",
+    "mic_proof",
+    "benchmark_cli",
+]
+resolver = "2"

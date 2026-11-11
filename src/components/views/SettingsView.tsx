@@ -1,20 +1,17 @@
 import React, { useEffect, useState } from "react";
 import { useAppStore, AppSettings } from "@/store/useAppStore";
-import { applyThemeToDocument } from "@/lib/theme";
+import { applyThemeToDocument, THEMES, getTheme, resolveTheme } from "@/lib/theme";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
-  Sliders,
+  Palette,
   Keyboard,
   Volume2,
   FileText,
-  History,
   Cpu,
-  Monitor,
-  Info,
   Check,
   Copy,
   FolderOpen,
@@ -22,16 +19,23 @@ import {
   Play,
   Sparkles,
   AlertTriangle,
+  Trash2,
 } from "lucide-react";
 
 export const SettingsView: React.FC = () => {
   const {
     settings,
     audioDevices,
+    modelStatus,
+    recordings,
     fetchSettings,
     saveSettings,
     fetchAudioDevices,
     fetchModelStatus,
+    fetchRecordings,
+    clearAllRecordings,
+    validateModelPath,
+    importLocalModel,
     setShowOnboarding,
   } = useAppStore();
 
@@ -43,49 +47,41 @@ export const SettingsView: React.FC = () => {
   const [benchmarkResult, setBenchmarkResult] = useState<{ rtf: number; inference_ms: number } | null>(null);
   const [isPreviewingOverlay, setIsPreviewingOverlay] = useState(false);
   const [isPlayingAudioCue, setIsPlayingAudioCue] = useState(false);
-  const [previewRawText, setPreviewRawText] = useState(
-    "I need to do a few things first go to the shop second call my friend third finish my assignment"
-  );
-  const [previewStructuredText, setPreviewStructuredText] = useState<string | null>(null);
-  const [previewLatencyMs, setPreviewLatencyMs] = useState<number | null>(null);
-  const [previewWordCount, setPreviewWordCount] = useState<number | null>(null);
-  const [previewCharCount, setPreviewCharCount] = useState<number | null>(null);
-  const [isPreviewingStructure, setIsPreviewingStructure] = useState(false);
+  const [modelImportFolder, setModelImportFolder] = useState("");
+  const [modelValidating, setModelValidating] = useState(false);
+  const [modelImportStatus, setModelImportStatus] = useState<string | null>(null);
+  const [modelImportError, setModelImportError] = useState<string | null>(null);
 
-  const handleTestSmartStructure = async () => {
-    setIsPreviewingStructure(true);
+  const [availableLmModels, setAvailableLmModels] = useState<string[]>([]);
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<boolean | null>(null);
+
+  const fetchLmStudioModels = async () => {
     try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      const config = {
-        enabled: true,
-        sentence_structure: settings.smart_sentence_structure,
-        auto_bullets: settings.smart_auto_bullets,
-        aggressiveness: settings.smart_aggressiveness || "balanced",
-        bullet_style: settings.smart_bullet_style || "bullet",
-      };
-      const res = await invoke<{
-        text: string;
-        changed: boolean;
-        latency_us: number;
-        word_count: number;
-        char_count: number;
-      }>("apply_structure_preview", { text: previewRawText, config });
-      setPreviewStructuredText(res.text);
-      setPreviewLatencyMs(Number((res.latency_us / 1000).toFixed(2)));
-      setPreviewWordCount(res.word_count);
-      setPreviewCharCount(res.char_count);
-    } catch (err) {
-      console.warn("apply_structure_preview error:", err);
-    } finally {
-      setIsPreviewingStructure(false);
-    }
+      const { invoke } = await import('@tauri-apps/api/core');
+      const models = await invoke<string[]>('get_lm_studio_models');
+      setAvailableLmModels(models);
+    } catch { setAvailableLmModels([]); }
+  };
+
+  const handleTestConnection = async () => {
+    setIsTestingConnection(true);
+    setConnectionStatus(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const ok = await invoke<boolean>('test_lm_studio_connection');
+      setConnectionStatus(ok);
+      if (ok) await fetchLmStudioModels();
+    } catch { setConnectionStatus(false); }
+    finally { setIsTestingConnection(false); }
   };
 
   useEffect(() => {
     fetchSettings();
     fetchAudioDevices();
     fetchModelStatus();
-  }, [fetchSettings, fetchAudioDevices, fetchModelStatus]);
+    fetchRecordings();
+  }, [fetchSettings, fetchAudioDevices, fetchModelStatus, fetchRecordings]);
 
   // Live hotkey recording listener
   useEffect(() => {
@@ -141,10 +137,10 @@ export const SettingsView: React.FC = () => {
         const report = await invoke<string>("copy_diagnostics");
         navigator.clipboard.writeText(report);
       } catch {
-        navigator.clipboard.writeText("Murmur Diagnostics - Offline local speech");
+        navigator.clipboard.writeText("WhisperType Diagnostics - Offline local speech");
       }
     } else {
-      navigator.clipboard.writeText("Murmur v0.1.0 Diagnostics Report");
+      navigator.clipboard.writeText("WhisperType v0.1.0 Diagnostics Report");
     }
     setCopiedDiag(true);
     setTimeout(() => setCopiedDiag(false), 2500);
@@ -172,6 +168,27 @@ export const SettingsView: React.FC = () => {
         console.warn("open_log_dir error:", err);
       }
     }
+  };
+
+  // Open Recordings Directory
+  const handleOpenRecordingsDir = async () => {
+    if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("open_recordings_dir");
+      } catch (err) {
+        console.warn("open_recordings_dir error:", err);
+      }
+    }
+  };
+
+  const [showClearRecordingsConfirm, setShowClearRecordingsConfirm] = useState(false);
+
+  const totalRecordingsBytes = recordings.reduce((acc, r) => acc + (r.size_bytes || 0), 0);
+  const formatStorageSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
   // Trigger Benchmark
@@ -307,110 +324,32 @@ export const SettingsView: React.FC = () => {
         </Button>
       </div>
 
-      {/* Tabs Navigation */}
+      {/* Tabs Navigation (4 Clean Tabs) */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-        <TabsList className="grid grid-cols-4 sm:grid-cols-8 h-auto p-1 bg-secondary/50 rounded-lg border border-border/60 gap-1 font-pixel text-[11px]">
-          <TabsTrigger value="general" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Sliders className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">General</span>
+        <TabsList className="grid grid-cols-2 sm:grid-cols-4 h-auto p-1 bg-secondary/50 rounded-lg border border-border/60 gap-1 font-pixel text-[11px]">
+          <TabsTrigger value="general" className="text-[11px] font-pixel py-2 flex items-center justify-center space-x-1.5">
+            <Keyboard className="h-3.5 w-3.5 text-primary" />
+            <span>General & Hotkey</span>
           </TabsTrigger>
-          <TabsTrigger value="hotkey" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Keyboard className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Hotkey</span>
+          <TabsTrigger value="audio" className="text-[11px] font-pixel py-2 flex items-center justify-center space-x-1.5">
+            <Volume2 className="h-3.5 w-3.5 text-primary" />
+            <span>Audio & Overlay</span>
           </TabsTrigger>
-          <TabsTrigger value="audio" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Volume2 className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Audio</span>
+          <TabsTrigger value="text" className="text-[11px] font-pixel py-2 flex items-center justify-center space-x-1.5">
+            <FileText className="h-3.5 w-3.5 text-primary" />
+            <span>Text & AI</span>
           </TabsTrigger>
-          <TabsTrigger value="text" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <FileText className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Text</span>
-          </TabsTrigger>
-          <TabsTrigger value="history" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <History className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">History</span>
-          </TabsTrigger>
-          <TabsTrigger value="performance" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Cpu className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Perf</span>
-          </TabsTrigger>
-          <TabsTrigger value="overlay" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Monitor className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Overlay</span>
-          </TabsTrigger>
-          <TabsTrigger value="about" className="text-[11px] font-pixel py-1.5 flex items-center space-x-1">
-            <Info className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">About</span>
+          <TabsTrigger value="advanced" className="text-[11px] font-pixel py-2 flex items-center justify-center space-x-1.5">
+            <Cpu className="h-3.5 w-3.5 text-primary" />
+            <span>System & Advanced</span>
           </TabsTrigger>
         </TabsList>
 
         {/* ========================================================
-            TAB 1: GENERAL
+            TAB 1: GENERAL, HOTKEY & APPEARANCE
         ======================================================== */}
         <TabsContent value="general" className="space-y-4 pt-3">
-          <Card className="border-border/70 bg-card pixel-border">
-            <CardContent className="p-4 space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Launch on Startup</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Start Murmur silently in the Windows system tray when logging in.
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.launch_on_startup}
-                  onCheckedChange={(checked) => saveSettings({ launch_on_startup: checked })}
-                />
-              </div>
-
-              <div className="border-t border-border/50 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Visual Theme Aesthetic</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Select your preferred phosphor glow color palette.
-                  </p>
-                </div>
-                <select
-                  value={settings.theme || "dark"}
-                  onChange={(e) => {
-                    const newTheme = e.target.value;
-                    applyThemeToDocument(newTheme);
-                    saveSettings({ theme: newTheme });
-                  }}
-                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
-                >
-                  <option value="dark">Phosphor Green (Dark Default)</option>
-                  <option value="amber">Retro Amber (CRT Monospace)</option>
-                  <option value="matrix">Matrix Neon (High Contrast)</option>
-                  <option value="cyan">Cyberpunk Cyan</option>
-                  <option value="light">Clean Light</option>
-                </select>
-              </div>
-
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Reset First-Run Wizard</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Re-run the initial 3-step setup tour for audio, model, and hotkeys.
-                  </p>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowOnboarding(true)}
-                  className="text-xs h-8"
-                >
-                  Launch Wizard
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ========================================================
-            TAB 2: HOTKEY
-        ======================================================== */}
-        <TabsContent value="hotkey" className="space-y-4 pt-3">
+          {/* Global Hotkey Card */}
           <Card className="border-border/70 bg-card pixel-border">
             <CardContent className="p-4 space-y-4">
               <div>
@@ -418,7 +357,7 @@ export const SettingsView: React.FC = () => {
                   <div>
                     <h3 className="text-sm font-semibold">Global Dictation Hotkey</h3>
                     <p className="text-xs text-muted-foreground">
-                      Low-level keyboard hook active across all applications.
+                      Low-level keyboard shortcut active across all applications.
                     </p>
                   </div>
                   <div className="flex items-center space-x-1.5">
@@ -495,6 +434,257 @@ export const SettingsView: React.FC = () => {
               <div className="border-t border-border/50 pt-3 flex items-center space-x-2 text-xs text-muted-foreground">
                 <AlertTriangle className="h-4 w-4 text-amber-400 shrink-0" />
                 <span>Pressing the <b>Esc</b> key at any time immediately cancels recording and discards audio.</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Appearance & Themes Card */}
+          <Card className="border-border/70 bg-card pixel-border">
+            <CardContent className="p-4 space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    <Palette className="h-4 w-4 text-primary" />
+                    Visual Theme Palettes
+                  </h3>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Matte finish palettes are the default aesthetic matching the web app. Retro &amp; neon CRT styles are available as optional themes below.
+                  </p>
+                </div>
+                <Button
+                  variant="pixel"
+                  size="sm"
+                  onClick={handlePreviewOverlay}
+                  disabled={isPreviewingOverlay}
+                  className="text-xs h-8 font-pixel shrink-0"
+                >
+                  <Play className="h-3.5 w-3.5 mr-1" />
+                  {isPreviewingOverlay ? "Previewing..." : "Preview Overlay"}
+                </Button>
+              </div>
+
+              {/* Matte Finish Themes (Default) */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground">
+                    Matte Finish Themes (Default)
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Clean Inter typography, soft borders &amp; zero scanlines
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-2.5">
+                  {THEMES.filter((t) => t.category === "matte").map((t) => {
+                    const isSelected = (settings.theme || "dark") === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          applyThemeToDocument(t.id);
+                          saveSettings({ theme: t.id });
+                        }}
+                        className={`relative flex flex-col text-left p-3 rounded-xl border transition-all text-xs focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer ${
+                          isSelected
+                            ? "border-primary bg-primary/10 shadow-sm pixel-border"
+                            : "border-border/70 bg-secondary/30 hover:border-border hover:bg-secondary/60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                          <span className="font-semibold text-foreground truncate">
+                            {t.name}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] px-1 py-0 uppercase font-pixel ${
+                              isSelected
+                                ? "bg-primary text-primary-foreground border-transparent"
+                                : "border-border text-muted-foreground"
+                            }`}
+                          >
+                            {isSelected ? "Active" : t.mode}
+                          </Badge>
+                        </div>
+
+                        <p className="text-[11px] text-muted-foreground line-clamp-2 mb-3 min-h-[32px]">
+                          {t.description}
+                        </p>
+
+                        <div
+                          className="w-full h-7 rounded-lg border flex items-center justify-between px-2.5 mt-auto shadow-inner"
+                          style={{
+                            backgroundColor: t.preview.background,
+                            borderColor: t.preview.border,
+                          }}
+                        >
+                          <div
+                            className="h-3.5 px-2 rounded flex items-center gap-1.5 border"
+                            style={{
+                              backgroundColor: t.preview.surface,
+                              borderColor: t.preview.border,
+                            }}
+                          >
+                            <div
+                              className="h-2 w-2 rounded-full"
+                              style={{
+                                backgroundColor: t.preview.primary,
+                              }}
+                            />
+                            <div
+                              className="h-2 w-2 rounded-full"
+                              style={{
+                                backgroundColor: t.preview.statusRecording,
+                              }}
+                            />
+                          </div>
+                          <div
+                            className="h-1.5 w-6 rounded-full opacity-80"
+                            style={{ backgroundColor: t.preview.foreground }}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Optional Retro & Neon CRT Themes */}
+              <div className="space-y-2 pt-3 border-t border-border/50">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-foreground">
+                    Optional Retro &amp; Neon CRT Themes
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    Enables pixel typography, neon phosphor glow &amp; CRT scanlines
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  {THEMES.filter((t) => t.category === "retro").map((t) => {
+                    const isSelected = settings.theme === t.id;
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => {
+                          applyThemeToDocument(t.id);
+                          saveSettings({ theme: t.id });
+                        }}
+                        className={`relative flex flex-col text-left p-3 rounded-xl border transition-all text-xs focus:outline-none focus:ring-2 focus:ring-primary cursor-pointer ${
+                          isSelected
+                            ? "border-primary bg-primary/10 shadow-sm pixel-border"
+                            : "border-border/70 bg-secondary/30 hover:border-border hover:bg-secondary/60"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <span className="font-semibold text-foreground truncate">
+                            {t.name}
+                          </span>
+                          <Badge
+                            variant="outline"
+                            className={`text-[9px] px-1 py-0 uppercase font-pixel ${
+                              isSelected
+                                ? "bg-primary text-primary-foreground border-transparent"
+                                : "border-border text-muted-foreground"
+                            }`}
+                          >
+                            {isSelected ? "Active" : "Retro"}
+                          </Badge>
+                        </div>
+
+                        <p className="text-[11px] text-muted-foreground line-clamp-2 mb-3 min-h-[32px]">
+                          {t.description}
+                        </p>
+
+                        <div
+                          className="w-full h-7 rounded border flex items-center justify-between px-2.5 mt-auto shadow-inner"
+                          style={{
+                            backgroundColor: t.preview.background,
+                            borderColor: t.preview.border,
+                          }}
+                        >
+                          <div
+                            className="h-3.5 px-2 rounded flex items-center gap-1.5 border"
+                            style={{
+                              backgroundColor: t.preview.surface,
+                              borderColor: t.preview.border,
+                            }}
+                          >
+                            <div
+                              className="h-2 w-2 rounded-full"
+                              style={{
+                                backgroundColor: t.preview.primary,
+                                boxShadow: `0 0 5px ${t.preview.primary}`,
+                              }}
+                            />
+                            <div
+                              className="h-2 w-2 rounded-full"
+                              style={{
+                                backgroundColor: t.preview.statusRecording,
+                              }}
+                            />
+                          </div>
+                          <div
+                            className="h-1.5 w-6 rounded-full opacity-80"
+                            style={{ backgroundColor: t.preview.foreground }}
+                          />
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded border border-border/60 bg-secondary/30 p-3 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <span className="font-medium text-foreground">Active Effective Theme: </span>
+                  <span className="text-muted-foreground">
+                    {getTheme(settings.theme).name}
+                    {" "}({resolveTheme(settings.theme) === "light" || resolveTheme(settings.theme) === "paper" ? "Light Mode" : "Dark Mode"})
+                  </span>
+                  {settings.theme === "system" && (
+                    <span className="ml-1 text-primary">
+                      — Resolved from Windows OS preference: {resolveTheme("system")}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] text-muted-foreground">
+                  Applied immediately to main and overlay windows.
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Startup & Setup Wizard Card */}
+          <Card className="border-border/70 bg-card pixel-border">
+            <CardContent className="p-4 space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Launch on Startup</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Start silently in the Windows system tray when logging in.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.launch_on_startup}
+                  onCheckedChange={(checked) => saveSettings({ launch_on_startup: checked })}
+                />
+              </div>
+
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Reset First-Run Setup Wizard</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Re-run the initial 3-step setup tour for audio, model, and hotkeys.
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowOnboarding(true)}
+                  className="text-xs h-8"
+                >
+                  Launch Wizard
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -590,6 +780,158 @@ export const SettingsView: React.FC = () => {
                     onCheckedChange={(checked) => saveSettings({ sound_effects_enabled: checked })}
                   />
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Floating Overlay HUD Card */}
+          <Card className="border-border/70 bg-card pixel-border">
+            <CardContent className="p-4 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Floating Overlay Position</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Where the translucent status pill appears during dictation.
+                  </p>
+                </div>
+                <select
+                  value={settings.overlay_position || "bottom-center"}
+                  onChange={(e) => handlePositionChange(e.target.value)}
+                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
+                >
+                  <option value="bottom-center">Bottom Center (Default)</option>
+                  <option value="top-center">Top Center</option>
+                  <option value="bottom-right">Bottom Right</option>
+                  <option value="bottom-left">Bottom Left</option>
+                  <option value="top-right">Top Right</option>
+                  <option value="top-left">Top Left</option>
+                  <option value="center">Center</option>
+                </select>
+              </div>
+
+              {/* Overlay Size */}
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Overlay Size</h3>
+                  <p className="text-xs text-muted-foreground">Choose compact or larger pill scaling.</p>
+                </div>
+                <div className="flex items-center space-x-1.5">
+                  {(["S", "M", "L"] as const).map((sz) => (
+                    <Button
+                      key={sz}
+                      variant={settings.overlay_size === sz ? "pixel" : "outline"}
+                      size="sm"
+                      onClick={() => saveSettings({ overlay_size: sz })}
+                      className="h-7 w-8 text-xs font-pixel p-0"
+                    >
+                      {sz}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Anti-Distraction Dim Delay */}
+              <div className="border-t border-border/50 pt-4 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold">Anti-Distraction Dim Delay</span>
+                  <span className="font-mono text-primary">{settings.dim_delay_seconds || 2}s</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="10"
+                  step="1"
+                  value={settings.dim_delay_seconds || 2}
+                  onChange={(e) => saveSettings({ dim_delay_seconds: Number(e.target.value) })}
+                  className="w-full accent-primary h-1.5 bg-secondary rounded-lg cursor-pointer"
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Pill smoothly dims after this duration of silence so you stay focused on typing.
+                </p>
+              </div>
+
+              {/* Anti-Distraction Dim Opacity */}
+              <div className="border-t border-border/50 pt-4 space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold">Dimmed Opacity Percentage</span>
+                  <span className="font-mono text-primary">{settings.dim_opacity_percent || 40}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="80"
+                  step="5"
+                  value={settings.dim_opacity_percent || 40}
+                  onChange={(e) => saveSettings({ dim_opacity_percent: Number(e.target.value) })}
+                  className="w-full accent-primary h-1.5 bg-secondary rounded-lg cursor-pointer"
+                />
+              </div>
+
+              {/* Brighten on speech */}
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Brighten When Speaking</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Instantly restores full opacity when voice activity is detected.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.brighten_on_speech}
+                  onCheckedChange={(checked) => saveSettings({ brighten_on_speech: checked })}
+                />
+              </div>
+
+              {/* Ultra Minimal Mode */}
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Ultra-Minimal Mode</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Renders only a tiny red dot and timer readout (no text or waveform).
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.ultra_minimal_mode}
+                  onCheckedChange={(checked) => saveSettings({ ultra_minimal_mode: checked })}
+                />
+              </div>
+
+              {/* Fullscreen Behavior */}
+              <div className="border-t border-border/50 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Fullscreen App Behavior</h3>
+                  <p className="text-xs text-muted-foreground">
+                    How the overlay reacts when a fullscreen game or presentation is running.
+                  </p>
+                </div>
+                <select
+                  value={settings.fullscreen_behavior || "show"}
+                  onChange={(e) => saveSettings({ fullscreen_behavior: e.target.value })}
+                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
+                >
+                  <option value="show">Always Show (Topmost)</option>
+                  <option value="hide">Hide When Fullscreen Active</option>
+                  <option value="minimal">Minimal Dot Only</option>
+                </select>
+              </div>
+
+              {/* Preview Button */}
+              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-semibold">Preview Overlay Animation</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Executes a 4-second simulated recording animation on the overlay window.
+                  </p>
+                </div>
+                <Button
+                  variant="pixel"
+                  size="sm"
+                  onClick={handlePreviewOverlay}
+                  disabled={isPreviewingOverlay}
+                  className="text-xs h-8 font-pixel"
+                >
+                  <Play className="h-3.5 w-3.5 mr-1" />
+                  {isPreviewingOverlay ? "Previewing..." : "Preview Overlay"}
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -706,192 +1048,271 @@ export const SettingsView: React.FC = () => {
             </CardContent>
           </Card>
 
-          {/* Smart Structure Card */}
+          {/* Optional Pro AI Mode (LM Studio Integration) */}
           <Card className="border-border/70 bg-card pixel-border">
             <CardContent className="p-4 space-y-4">
+              {/* Master toggle */}
               <div className="flex items-center justify-between">
                 <div>
-                  <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                    <h3 className="text-sm font-semibold">Smart Structure</h3>
-                    <Badge variant={settings.smart_structure_enabled ? "default" : "outline"} className="text-[10px] uppercase font-pixel tracking-wider">
-                      {settings.smart_structure_enabled ? "ACTIVE" : "OFF"}
-                    </Badge>
-                  </div>
+                  <h3 className="text-sm font-semibold flex items-center gap-1.5">
+                    <Sparkles className="h-3.5 w-3.5 text-violet-400" />
+                    Pro AI Mode (Optional LM Studio Integration)
+                  </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Structure continuous dictation into clean sentences, paragraphs, and bullet lists using speech pauses and discourse signals. Preserves original words, punctuation, and capitalization.
+                    Requires user-installed LM Studio and a local LLM for AI note structuring and grammar refinement.
                   </p>
                 </div>
                 <Switch
-                  checked={settings.smart_structure_enabled}
-                  onCheckedChange={(checked) => saveSettings({ smart_structure_enabled: checked })}
+                  checked={settings.professional_mode_enabled}
+                  onCheckedChange={(v) => saveSettings({ professional_mode_enabled: v })}
                 />
               </div>
 
-              {settings.smart_structure_enabled && (
-                <div className="border-t border-border/50 pt-4 space-y-4">
-                  {/* Sentence / Thought Structure */}
-                  <div className="flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-medium">Sentence / Thought Structure</span>
-                      <p className="text-[11px] text-muted-foreground">
-                        Inserts paragraph breaks at natural thought transitions and pauses.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={settings.smart_sentence_structure}
-                      onCheckedChange={(checked) => saveSettings({ smart_sentence_structure: checked })}
-                    />
-                  </div>
-
-                  {/* Auto Bullet Points */}
-                  <div className="flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-medium">Auto Bullet Points & Lists</span>
-                      <p className="text-[11px] text-muted-foreground">
-                        Detects spoken sequences (first, second, number one...) and formats them as lists.
-                      </p>
-                    </div>
-                    <Switch
-                      checked={settings.smart_auto_bullets}
-                      onCheckedChange={(checked) => saveSettings({ smart_auto_bullets: checked })}
-                    />
-                  </div>
-
-                  {/* Structure Aggressiveness */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold">Structure Aggressiveness</span>
-                      <span className="font-mono text-primary text-[11px] uppercase">
-                        {settings.smart_aggressiveness || "balanced"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      {[
-                        { id: "conservative", label: "Conservative", desc: "Requires strong pauses & multiple signals" },
-                        { id: "balanced", label: "Balanced", desc: "Default. Natural breaks & clear lists" },
-                        { id: "aggressive", label: "Aggressive", desc: "Separates sentences & clauses readily" },
-                      ].map((item) => (
-                        <div
-                          key={item.id}
-                          onClick={() => saveSettings({ smart_aggressiveness: item.id })}
-                          className={`p-2.5 rounded-lg border cursor-pointer transition-colors ${
-                            (settings.smart_aggressiveness || "balanced") === item.id
-                              ? "border-primary bg-primary/10 phosphor-glow-subtle"
-                              : "border-border/60 bg-secondary/30 hover:border-border"
-                          }`}
-                        >
-                          <span className="font-semibold block text-xs">{item.label}</span>
-                          <span className="text-[10px] text-muted-foreground block mt-0.5 leading-tight">{item.desc}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Bullet Style */}
-                  <div className="space-y-1.5 pt-1">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-semibold">Bullet List Style</span>
-                      <span className="font-mono text-primary text-[11px] uppercase">
-                        {settings.smart_bullet_style || "bullet"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-4 gap-2 text-xs">
-                      {[
-                        { id: "bullet", label: "Bullet", symbol: "• Item" },
-                        { id: "dash", label: "Dash", symbol: "- Item" },
-                        { id: "asterisk", label: "Asterisk", symbol: "* Item" },
-                        { id: "numbered", label: "Numbered", symbol: "1. Item" },
-                      ].map((style) => (
-                        <div
-                          key={style.id}
-                          onClick={() => saveSettings({ smart_bullet_style: style.id })}
-                          className={`p-2 rounded-lg border cursor-pointer text-center transition-colors ${
-                            (settings.smart_bullet_style || "bullet") === style.id
-                              ? "border-primary bg-primary/10 phosphor-glow-subtle"
-                              : "border-border/60 bg-secondary/30 hover:border-border"
-                          }`}
-                        >
-                          <span className="font-mono text-xs block text-primary">{style.symbol}</span>
-                          <span className="text-[10px] text-muted-foreground block mt-0.5">{style.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Structure Preview / Test Surface */}
-              <div className="border-t border-border/50 pt-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground font-pixel">
-                      Structure Preview & Testing
-                    </h4>
-                    <p className="text-[11px] text-muted-foreground">
-                      Test structuring algorithms on raw transcript text without speaking.
+              {settings.professional_mode_enabled && (
+                <>
+                  {/* Hotkey source selector */}
+                  <div className="border-t border-border/50 pt-4 space-y-2">
+                    <h3 className="text-sm font-semibold">Professional Shortcut</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Hold this key/button to activate Professional Mode recording.
                     </p>
+                    <div className="flex gap-2 flex-wrap pt-1">
+                      {[
+                        { value: "keyboard", label: "Ctrl + Win" },
+                        { value: "mouse4", label: "Mouse 4 (Back)" },
+                        { value: "mouse5", label: "Mouse 5 (Forward)" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          onClick={() => saveSettings({ professional_hotkey_source: opt.value })}
+                          className={`px-3 py-1.5 rounded-md text-xs border font-pixel transition-colors ${
+                            settings.professional_hotkey_source === opt.value
+                              ? "bg-primary text-primary-foreground border-primary phosphor-glow"
+                              : "border-border text-muted-foreground hover:text-foreground hover:border-border/80"
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleTestSmartStructure}
-                    disabled={isPreviewingStructure || !previewRawText.trim()}
-                    className="h-7 px-3 text-xs font-pixel flex items-center gap-1.5 border-border/80 hover:border-primary/50"
-                  >
-                    <Play className={`h-3 w-3 text-primary ${isPreviewingStructure ? "animate-pulse" : ""}`} />
-                    <span>{isPreviewingStructure ? "Testing..." : "Apply Structure"}</span>
-                  </Button>
-                </div>
 
-                <div className="space-y-1">
-                  <label className="text-[10px] font-mono uppercase text-muted-foreground">Raw Transcript Input:</label>
-                  <textarea
-                    rows={2}
-                    value={previewRawText}
-                    onChange={(e) => setPreviewRawText(e.target.value)}
-                    placeholder="Enter raw speech transcript..."
-                    className="w-full text-xs font-mono bg-secondary/40 border border-border/60 rounded-md p-2 resize-none focus:outline-none focus:border-primary text-foreground"
-                  />
-                </div>
+                  {/* Pro Mode Maximum Recording Length */}
+                  <div className="border-t border-border/50 pt-4 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <h3 className="text-sm font-semibold">Pro Mode Max Recording Time</h3>
+                        <p className="text-xs text-muted-foreground">
+                          Maximum duration for a single Pro AI study note or explanation (up to 10 minutes).
+                        </p>
+                      </div>
+                      <span className="font-pixel text-xs text-violet-300 bg-violet-500/15 border border-violet-500/40 px-2.5 py-1 rounded">
+                        {Math.floor((settings.professional_max_recording_seconds || 300) / 60)}m{" "}
+                        {(settings.professional_max_recording_seconds || 300) % 60 > 0
+                          ? `${(settings.professional_max_recording_seconds || 300) % 60}s`
+                          : ""}
+                      </span>
+                    </div>
 
-                {previewStructuredText !== null && (
-                  <div className="space-y-2 rounded-lg border border-border/60 bg-secondary/20 p-3">
-                    <div className="flex items-center justify-between text-[11px] font-mono">
-                      <span className="text-primary font-semibold">Structured Output:</span>
-                      <div className="flex items-center gap-3 text-muted-foreground text-[10px]">
-                        {previewLatencyMs !== null && (
-                          <span>Latency: <strong className="text-primary">{previewLatencyMs} ms</strong></span>
-                        )}
-                        {previewWordCount !== null && (
-                          <span>Words: <strong className="text-foreground">{previewWordCount}</strong></span>
-                        )}
-                        {previewCharCount !== null && (
-                          <span>Chars: <strong className="text-foreground">{previewCharCount}</strong></span>
-                        )}
+                    <div className="flex gap-2 flex-wrap pt-0.5">
+                      {[
+                        { label: "1 Min (60s)", secs: 60 },
+                        { label: "3 Min (180s)", secs: 180 },
+                        { label: "5 Min (300s)", secs: 300 },
+                        { label: "10 Min (600s)", secs: 600 },
+                      ].map((preset) => (
+                        <button
+                          key={preset.secs}
+                          type="button"
+                          onClick={() =>
+                            saveSettings({ professional_max_recording_seconds: preset.secs })
+                          }
+                          className={`px-3 py-1 rounded-md text-xs border font-pixel transition-colors cursor-pointer ${
+                            (settings.professional_max_recording_seconds || 300) === preset.secs
+                              ? "bg-violet-600 text-white border-violet-400 shadow-sm"
+                              : "border-border text-muted-foreground hover:text-foreground"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <input
+                      type="range"
+                      min="30"
+                      max="600"
+                      step="30"
+                      value={settings.professional_max_recording_seconds || 300}
+                      onChange={(e) =>
+                        saveSettings({
+                          professional_max_recording_seconds: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="w-full accent-violet-500"
+                    />
+                  </div>
+
+                  {/* LM Studio section */}
+                  <div className="border-t border-border/50 pt-4 space-y-4">
+                    <div>
+                      <h3 className="text-sm font-semibold">LM Studio Configuration</h3>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Connect to your local LM Studio server. All processing remains 100% offline.
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Server URL</label>
+                      <input
+                        type="text"
+                        value={settings.lm_studio_url}
+                        onChange={(e) => saveSettings({ lm_studio_url: e.target.value })}
+                        className="w-full px-3 py-1.5 rounded-md text-xs bg-secondary border border-border focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                        placeholder="http://localhost:1234/v1"
+                      />
+                    </div>
+
+                    {(() => {
+                      const clean = (settings.lm_studio_url || "").trim().toLowerCase().replace(/^https?:\/\//, "");
+                      const host = clean.split("/")[0].split(":")[0];
+                      const isLoopback = host === "localhost" || host === "127.0.0.1" || host === "::1" || host.startsWith("127.");
+                      if (!isLoopback) {
+                        return (
+                          <div className="p-3 rounded-lg border border-amber-500/50 bg-amber-500/10 text-xs space-y-2">
+                            <div className="flex items-center space-x-2 text-amber-400 font-semibold">
+                              <AlertTriangle className="h-4 w-4 shrink-0" />
+                              <span>Privacy Warning: Remote LM Studio Endpoint</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                              This endpoint is not local. WhisperType&apos;s offline privacy guarantee will not apply to transcripts sent to this remote address.
+                            </p>
+                            <div className="flex items-center space-x-2 pt-1">
+                              <Switch
+                                checked={settings.lm_studio_allow_remote}
+                                onCheckedChange={(v) => saveSettings({ lm_studio_allow_remote: v })}
+                              />
+                              <label className="text-[11px] text-foreground font-medium cursor-pointer">
+                                I confirm and allow sending transcripts to this remote endpoint
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
+
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Model</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={settings.lm_studio_model_id}
+                          onChange={(e) => saveSettings({ lm_studio_model_id: e.target.value })}
+                          className="flex-1 px-3 py-1.5 rounded-md text-xs bg-secondary border border-border focus:outline-none focus:ring-1 focus:ring-primary"
+                        >
+                          <option value="">Auto-select first available model</option>
+                          {availableLmModels.map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={fetchLmStudioModels}
+                          className="text-xs shrink-0 h-8"
+                          title="Refresh model list from LM Studio"
+                        >
+                          Refresh
+                        </Button>
                       </div>
                     </div>
-                    <pre className="text-xs font-mono whitespace-pre-wrap text-foreground bg-background/60 p-2.5 rounded border border-border/40">
-                      {previewStructuredText}
-                    </pre>
+
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant={connectionStatus === true ? "pixel" : connectionStatus === false ? "outline" : "outline"}
+                        onClick={handleTestConnection}
+                        disabled={isTestingConnection}
+                        className={`text-xs h-8 ${connectionStatus === true ? "text-primary phosphor-glow" : connectionStatus === false ? "text-rose-400 border-rose-500/40" : ""}`}
+                      >
+                        {isTestingConnection ? (
+                          "Testing..."
+                        ) : connectionStatus === true ? (
+                          <><Check className="h-3.5 w-3.5 mr-1" />Connected</>
+                        ) : connectionStatus === false ? (
+                          <><AlertTriangle className="h-3.5 w-3.5 mr-1" />Failed</>
+                        ) : (
+                          "Test Connection"
+                        )}
+                      </Button>
+                      {connectionStatus === false && (
+                        <p className="text-[11px] text-rose-400">
+                          LM Studio is not reachable. Make sure the server is running at the URL above.
+                        </p>
+                      )}
+                      {connectionStatus === true && (
+                        <p className="text-[11px] text-primary phosphor-glow-subtle">
+                          LM Studio is running. {availableLmModels.length} model{availableLmModels.length !== 1 ? "s" : ""} available.
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Temperature</label>
+                        <span className="text-xs font-pixel text-primary">{(settings.lm_studio_temperature ?? 0.2).toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.05"
+                        value={settings.lm_studio_temperature ?? 0.2}
+                        onChange={(e) => saveSettings({ lm_studio_temperature: parseFloat(e.target.value) })}
+                        className="w-full accent-primary"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Request Timeout</label>
+                        <span className="text-xs font-pixel text-primary">{settings.lm_studio_timeout_seconds ?? 90}s</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="15"
+                        max="300"
+                        step="15"
+                        value={settings.lm_studio_timeout_seconds ?? 90}
+                        onChange={(e) => saveSettings({ lm_studio_timeout_seconds: parseInt(e.target.value, 10) })}
+                        className="w-full accent-primary"
+                      />
+                    </div>
                   </div>
-                )}
-              </div>
+                </>
+              )}
+
+              {!settings.professional_mode_enabled && (
+                <div className="border-t border-border/50 pt-3 text-xs text-muted-foreground">
+                  Out of the box, voice-to-text works standalone. Enable this toggle if you have installed LM Studio and a local LLM for AI note structuring.
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
 
         {/* ========================================================
-            TAB 5: HISTORY
+            TAB 4: SYSTEM, STORAGE & ADVANCED
         ======================================================== */}
-        <TabsContent value="history" className="space-y-4 pt-3">
+        <TabsContent value="advanced" className="space-y-4 pt-3">
+          {/* History & Storage Card */}
           <Card className="border-border/70 bg-card pixel-border">
             <CardContent className="p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-semibold">Persistent History Database</h3>
                   <p className="text-xs text-muted-foreground">
-                    Store past transcripts locally in an encrypted SQLite database on disk.
+                    Store past transcripts locally in a SQLite database on disk.
                   </p>
                 </div>
                 <Switch
@@ -919,49 +1340,126 @@ export const SettingsView: React.FC = () => {
                 </p>
               </div>
 
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Store Audio Recordings</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Save recorded WAV samples locally alongside text transcripts.
-                  </p>
+              <div className="border-t border-border/50 pt-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold">Store Audio Recordings</h3>
+                    <p className="text-xs text-muted-foreground">
+                      Save recorded WAV samples locally alongside text transcripts.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.store_audio}
+                    onCheckedChange={(checked) => saveSettings({ store_audio: checked })}
+                  />
                 </div>
-                <Switch
-                  checked={settings.store_audio}
-                  onCheckedChange={(checked) => saveSettings({ store_audio: checked })}
-                />
+
+                {/* Audio Storage Stats & Actions */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 text-xs text-muted-foreground bg-secondary/30 p-2.5 rounded-md border border-border/50">
+                  <div className="flex items-center space-x-2">
+                    <Volume2 className="h-4 w-4 text-primary" />
+                    <span>
+                      <strong className="text-foreground">{recordings.length}</strong> {recordings.length === 1 ? "recording" : "recordings"} saved
+                      {" "}(<span className="font-mono">{formatStorageSize(totalRecordingsBytes)}</span>)
+                    </span>
+                  </div>
+
+                  <div className="flex items-center space-x-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleOpenRecordingsDir}
+                      className="h-7 px-2.5 text-xs text-foreground hover:bg-secondary"
+                      title="Open recordings folder in File Explorer"
+                    >
+                      <FolderOpen className="h-3.5 w-3.5 mr-1" />
+                      Open Folder
+                    </Button>
+
+                    {recordings.length > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowClearRecordingsConfirm(true)}
+                        className="h-7 px-2.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+                        title="Delete all saved WAV recordings"
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1" />
+                        Delete All Saved Audio
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                {showClearRecordingsConfirm && (
+                  <div className="p-3 border border-destructive/40 bg-destructive/10 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
+                    <div className="flex items-center space-x-2 text-destructive font-medium">
+                      <AlertTriangle className="h-4 w-4 shrink-0" />
+                      <span>Permanently delete all {recordings.length} saved audio files ({formatStorageSize(totalRecordingsBytes)})?</span>
+                    </div>
+                    <div className="flex items-center space-x-2 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowClearRecordingsConfirm(false)}
+                        className="h-6 px-2.5 text-xs"
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        onClick={async () => {
+                          await clearAllRecordings();
+                          setShowClearRecordingsConfirm(false);
+                        }}
+                        className="h-6 px-2.5 text-xs"
+                      >
+                        Yes, Delete All
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* ========================================================
-            TAB 6: PERFORMANCE & HARDWARE
-        ======================================================== */}
-        <TabsContent value="performance" className="space-y-4 pt-3">
+          {/* Performance & Local Model Card */}
           <Card className="border-border/70 bg-card pixel-border">
             <CardContent className="p-4 space-y-4">
               <div>
-                <h3 className="text-sm font-semibold">Inference Execution Provider</h3>
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-sm font-semibold">Inference Execution Provider</h3>
+                  <Badge variant="outline" className="font-mono text-[10px] text-emerald-400 border-emerald-500/40">
+                    ACTIVE: {(modelStatus?.active_provider || "cpu").toUpperCase()}
+                  </Badge>
+                </div>
                 <p className="text-xs text-muted-foreground mb-2">
                   sherpa-onnx runtime backend powering the Parakeet model.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
                   {[
-                    { id: "cpu", label: "CPU (Int8 Quantized)", desc: "Universal compatibility, zero GPU setup, ~0.066 RTF." },
-                    { id: "directml", label: "DirectML (DirectX 12)", desc: "Hardware acceleration on Windows AMD/Intel/NVIDIA." },
-                    { id: "cuda", label: "CUDA (NVIDIA)", desc: "Highest throughput on NVIDIA RTX GPUs." },
+                    { id: "cpu", label: "CPU (Int8 Quantized)", desc: "Universal compatibility, zero GPU setup, ~0.066 RTF.", available: true },
+                    { id: "directml", label: "DirectML (DirectX 12)", desc: "Unavailable: bundled runtime supports CPU Int8 only.", available: false },
+                    { id: "cuda", label: "CUDA (NVIDIA)", desc: "Unavailable: bundled runtime supports CPU Int8 only.", available: false },
                   ].map((p) => (
                     <div
                       key={p.id}
-                      onClick={() => saveSettings({ performance_provider: p.id })}
-                      className={`p-3 rounded-lg border cursor-pointer ${
-                        settings.performance_provider === p.id
-                          ? "border-primary bg-primary/10 phosphor-glow-subtle"
-                          : "border-border/60 bg-secondary/40"
+                      onClick={() => {
+                        if (p.available) saveSettings({ performance_provider: p.id });
+                      }}
+                      className={`p-3 rounded-lg border ${
+                        !p.available
+                          ? "opacity-50 cursor-not-allowed border-border/40 bg-secondary/20"
+                          : settings.performance_provider === p.id
+                          ? "border-primary bg-primary/10 phosphor-glow-subtle cursor-pointer"
+                          : "border-border/60 bg-secondary/40 cursor-pointer"
                       }`}
                     >
-                      <span className="font-semibold block">{p.label}</span>
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold block">{p.label}</span>
+                        {!p.available && <span className="text-[10px] text-muted-foreground">(CPU only)</span>}
+                      </div>
                       <span className="text-[11px] text-muted-foreground block mt-1">{p.desc}</span>
                     </div>
                   ))}
@@ -983,14 +1481,107 @@ export const SettingsView: React.FC = () => {
                   onChange={(e) => saveSettings({ thread_count: Number(e.target.value) })}
                   className="w-full accent-primary h-1.5 bg-secondary rounded-lg cursor-pointer"
                 />
+                <span className="text-[11px] text-muted-foreground block">
+                  Reconfigures the inference thread pool and automatically reloads the recognizer in background.
+                </span>
+              </div>
+
+              {/* Local Model Setup & Import */}
+              <div className="border-t border-border/50 pt-4 space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold">Local Speech Model Setup & Directory</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Checks <code className="bg-secondary px-1 rounded">models/</code> directory first, then managed app storage.
+                  </p>
+                </div>
+
+                <div className="p-3 rounded-lg border border-border/50 bg-secondary/30 text-xs space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Status:</span>
+                    <span
+                      className={`font-mono font-semibold ${
+                        modelStatus?.is_loaded ? "text-emerald-400" : modelStatus?.is_loading ? "text-amber-400" : "text-rose-400"
+                      }`}
+                    >
+                      {modelStatus?.is_loaded ? "READY IN MEMORY" : modelStatus?.is_loading ? "LOADING..." : "MODEL NOT LOADED"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-[11px]">
+                    <span className="text-muted-foreground">Active Directory:</span>
+                    <span className="font-mono text-foreground truncate max-w-[320px]">{modelStatus?.model_dir || "None"}</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-lg border border-border/60 bg-secondary/20 space-y-2 text-xs">
+                  <span className="font-semibold block text-foreground">Import Local Model Folder</span>
+                  <p className="text-muted-foreground text-[11px]">
+                    Validate and copy local Parakeet TDT ONNX model files into managed storage.
+                  </p>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={modelImportFolder}
+                      onChange={(e) => setModelImportFolder(e.target.value)}
+                      placeholder="Folder containing encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx, tokens.txt"
+                      className="flex-1 px-2.5 py-1.5 rounded text-xs bg-secondary border border-border focus:outline-none focus:ring-1 focus:ring-primary font-mono"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={async () => {
+                        if (!modelImportFolder.trim()) return;
+                        setModelValidating(true);
+                        setModelImportStatus(null);
+                        setModelImportError(null);
+                        try {
+                          const res = await validateModelPath(modelImportFolder.trim());
+                          if (res.valid) {
+                            setModelImportStatus("All 4 required model files verified!");
+                          } else {
+                            setModelImportError(res.error_message || `Missing: ${res.missing_files.join(", ")}`);
+                          }
+                        } catch (e) {
+                          setModelImportError(String(e));
+                        } finally {
+                          setModelValidating(false);
+                        }
+                      }}
+                      disabled={modelValidating || !modelImportFolder.trim()}
+                      className="text-xs shrink-0 h-8"
+                    >
+                      Validate
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="pixel"
+                      onClick={async () => {
+                        if (!modelImportFolder.trim()) return;
+                        setModelValidating(true);
+                        setModelImportStatus(null);
+                        setModelImportError(null);
+                        try {
+                          const target = await importLocalModel(modelImportFolder.trim());
+                          setModelImportStatus(`Imported to ${target}! Background reload triggered.`);
+                        } catch (e) {
+                          setModelImportError(String(e));
+                        } finally {
+                          setModelValidating(false);
+                        }
+                      }}
+                      disabled={modelValidating || !modelImportFolder.trim()}
+                      className="text-xs shrink-0 font-pixel h-8"
+                    >
+                      Import
+                    </Button>
+                  </div>
+                  {modelImportStatus && <p className="text-[11px] text-emerald-400 font-medium">{modelImportStatus}</p>}
+                  {modelImportError && <p className="text-[11px] text-rose-400 font-medium">{modelImportError}</p>}
+                </div>
               </div>
 
               {/* Model Variant Selector */}
               <div className="border-t border-border/50 pt-4 space-y-2">
                 <h3 className="text-sm font-semibold">Model Variant</h3>
-                <p className="text-xs text-muted-foreground">
-                  Offline neural speech recognition checkpoint.
-                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
                   <div
                     onClick={() => saveSettings({ model_variant: "parakeet-tdt-0.6b-v3-int8" })}
@@ -1026,7 +1617,7 @@ export const SettingsView: React.FC = () => {
                 <div>
                   <h3 className="text-sm font-semibold">Idle Model Unload Timeout</h3>
                   <p className="text-xs text-muted-foreground">
-                    Free ~450MB of RAM when Murmur is not actively dictating.
+                    Free ~450MB of RAM when not actively dictating.
                   </p>
                 </div>
                 <select
@@ -1046,7 +1637,7 @@ export const SettingsView: React.FC = () => {
                 <div>
                   <h3 className="text-sm font-semibold">Real-Time Factor (RTF) Benchmark</h3>
                   <p className="text-xs text-muted-foreground">
-                    Measure empirical offline transcription speed on this hardware.
+                    Measure offline transcription speed on this hardware.
                   </p>
                   {benchmarkResult && (
                     <div className="mt-2 text-xs font-pixel text-emerald-400 phosphor-glow">
@@ -1067,199 +1658,14 @@ export const SettingsView: React.FC = () => {
               </div>
             </CardContent>
           </Card>
-        </TabsContent>
 
-        {/* ========================================================
-            TAB 7: OVERLAY
-        ======================================================== */}
-        <TabsContent value="overlay" className="space-y-4 pt-3">
-          <Card className="border-border/70 bg-card pixel-border">
-            <CardContent className="p-4 space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Screen Anchor Position</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Where the floating translucent pill appears during dictation.
-                  </p>
-                </div>
-                <select
-                  value={settings.overlay_position || "bottom-center"}
-                  onChange={(e) => handlePositionChange(e.target.value)}
-                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="bottom-center">Bottom Center (Default)</option>
-                  <option value="top-center">Top Center</option>
-                  <option value="bottom-right">Bottom Right</option>
-                  <option value="bottom-left">Bottom Left</option>
-                  <option value="top-right">Top Right</option>
-                  <option value="top-left">Top Left</option>
-                  <option value="center">Center</option>
-                </select>
-              </div>
-
-              {/* Overlay Size */}
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Overlay Size</h3>
-                  <p className="text-xs text-muted-foreground">Choose compact or larger pill scaling.</p>
-                </div>
-                <div className="flex items-center space-x-1.5">
-                  {(["S", "M", "L"] as const).map((sz) => (
-                    <Button
-                      key={sz}
-                      variant={settings.overlay_size === sz ? "pixel" : "outline"}
-                      size="sm"
-                      onClick={() => saveSettings({ overlay_size: sz })}
-                      className="h-7 w-8 text-xs font-pixel p-0"
-                    >
-                      {sz}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Anti-Distraction Dim Delay */}
-              <div className="border-t border-border/50 pt-4 space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold">Anti-Distraction Dim Delay</span>
-                  <span className="font-mono text-primary">{settings.dim_delay_seconds || 2}s</span>
-                </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="10"
-                  step="1"
-                  value={settings.dim_delay_seconds || 2}
-                  onChange={(e) => saveSettings({ dim_delay_seconds: Number(e.target.value) })}
-                  className="w-full accent-primary h-1.5 bg-secondary rounded-lg cursor-pointer"
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Pill smoothly dims after this duration of silence so you focus on typing.
-                </p>
-              </div>
-
-              {/* Anti-Distraction Dim Opacity */}
-              <div className="border-t border-border/50 pt-4 space-y-1.5">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-semibold">Dimmed Opacity Percentage</span>
-                  <span className="font-mono text-primary">{settings.dim_opacity_percent || 40}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="10"
-                  max="80"
-                  step="5"
-                  value={settings.dim_opacity_percent || 40}
-                  onChange={(e) => saveSettings({ dim_opacity_percent: Number(e.target.value) })}
-                  className="w-full accent-primary h-1.5 bg-secondary rounded-lg cursor-pointer"
-                />
-              </div>
-
-              {/* Brighten on speech */}
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Brighten When Speaking</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Instantly restores full opacity when voice speech threshold is detected.
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.brighten_on_speech}
-                  onCheckedChange={(checked) => saveSettings({ brighten_on_speech: checked })}
-                />
-              </div>
-
-              {/* Ultra Minimal Mode */}
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Ultra-Minimal Mode</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Renders only a tiny red dot and timer readout (no text or waveform).
-                  </p>
-                </div>
-                <Switch
-                  checked={settings.ultra_minimal_mode}
-                  onCheckedChange={(checked) => saveSettings({ ultra_minimal_mode: checked })}
-                />
-              </div>
-
-              {/* Fullscreen Behavior */}
-              <div className="border-t border-border/50 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Fullscreen App Behavior</h3>
-                  <p className="text-xs text-muted-foreground">
-                    How the overlay reacts when a fullscreen game or presentation is running.
-                  </p>
-                </div>
-                <select
-                  value={settings.fullscreen_behavior || "show"}
-                  onChange={(e) => saveSettings({ fullscreen_behavior: e.target.value })}
-                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="show">Always Show (Topmost)</option>
-                  <option value="hide">Hide When Fullscreen Active</option>
-                  <option value="minimal">Minimal Dot Only</option>
-                </select>
-              </div>
-
-              {/* Theme Selector */}
-              <div className="border-t border-border/50 pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold">Theme Palette</h3>
-                  <p className="text-xs text-muted-foreground">
-                    CRT phosphor glow color palette for overlay and windows.
-                  </p>
-                </div>
-                <select
-                  value={settings.theme || "dark"}
-                  onChange={(e) => {
-                    const newTheme = e.target.value;
-                    applyThemeToDocument(newTheme);
-                    saveSettings({ theme: newTheme });
-                  }}
-                  className="h-8 rounded border border-input bg-secondary px-3 py-1 text-xs text-foreground focus:outline-none"
-                >
-                  <option value="dark">Phosphor Green (Dark Default)</option>
-                  <option value="amber">Amber CRT (Retro Glow)</option>
-                  <option value="matrix">Matrix Neon (High Contrast)</option>
-                  <option value="cyan">Cyberpunk Cyan</option>
-                  <option value="light">Clean Light Mode</option>
-                </select>
-              </div>
-
-              {/* Preview Button */}
-              <div className="border-t border-border/50 pt-4 flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">Preview Overlay Animation</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Executes a 4-second simulated recording animation on the overlay window.
-                  </p>
-                </div>
-                <Button
-                  variant="pixel"
-                  size="sm"
-                  onClick={handlePreviewOverlay}
-                  disabled={isPreviewingOverlay}
-                  className="text-xs h-8 font-pixel"
-                >
-                  <Play className="h-3.5 w-3.5 mr-1" />
-                  {isPreviewingOverlay ? "Previewing..." : "Preview Overlay"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* ========================================================
-            TAB 8: ABOUT & DIAGNOSTICS
-        ======================================================== */}
-        <TabsContent value="about" className="space-y-4 pt-3">
+          {/* About & Diagnostics Card */}
           <Card className="border-border/70 bg-card pixel-border">
             <CardContent className="p-4 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="space-y-0.5">
                   <h3 className="text-base font-pixel font-bold tracking-wider text-foreground">
-                    MURMUR v0.1.0
+                    WHISPERTYPE v0.1.0
                   </h3>
                   <p className="text-xs text-muted-foreground">
                     Offline, privacy-first local dictation & voice command engine.
@@ -1286,9 +1692,11 @@ export const SettingsView: React.FC = () => {
                     ACTIVE BACKEND
                   </span>
                   <span className="font-semibold text-foreground uppercase">
-                    {settings.performance_provider} (sherpa-onnx)
+                    {(modelStatus?.active_provider || "cpu")} (sherpa-onnx)
                   </span>
-                  <span className="text-[10px] text-muted-foreground block">{settings.thread_count} CPU Threads</span>
+                  <span className="text-[10px] text-muted-foreground block">
+                    {modelStatus?.thread_count || settings.thread_count} CPU Threads
+                  </span>
                 </div>
                 <div className="p-2.5 rounded bg-secondary/50 border border-border/50">
                   <span className="text-[10px] font-pixel text-muted-foreground block uppercase">
@@ -1297,39 +1705,19 @@ export const SettingsView: React.FC = () => {
                   <span className="font-semibold text-foreground">Windows 10/11 x86_64</span>
                   <span className="text-[10px] text-muted-foreground block">CPAL WASAPI & Win32 Hook</span>
                 </div>
-                <div className="p-2.5 rounded bg-secondary/50 border border-border/50">
-                  <span className="text-[10px] font-pixel text-muted-foreground block uppercase">
-                    GPU / GRAPHICS
-                  </span>
-                  <span className="font-semibold text-foreground">DirectX 12 / DirectML</span>
-                  <span className="text-[10px] text-muted-foreground block">
-                    {settings.performance_provider === "cuda"
-                      ? "CUDA RTX Acceleration"
-                      : settings.performance_provider === "directml"
-                      ? "DirectML Accelerated"
-                      : "DirectML Compatible"}
-                  </span>
-                </div>
-                <div className="p-2.5 rounded bg-secondary/50 border border-border/50 col-span-2 sm:col-span-2">
-                  <span className="text-[10px] font-pixel text-muted-foreground block uppercase">
-                    MIC PRIVACY & PERMISSION
-                  </span>
-                  <div className="flex items-center space-x-2 pt-0.5">
-                    <Badge variant="outline" className="font-pixel text-[10px] text-emerald-400 border-emerald-500/40 phosphor-glow-subtle flex items-center space-x-1">
-                      <Check className="h-3 w-3 mr-1" />
-                      <span>ACCESS GRANTED (WASAPI)</span>
-                    </Badge>
-                    <span className="text-[10px] text-muted-foreground">Ready for local capture</span>
-                  </div>
-                </div>
               </div>
+
+              {/* Third-Party Model Attribution */}
+              <p className="text-[11px] text-muted-foreground">
+                Speech recognition powered by <span className="font-mono text-foreground">nvidia/parakeet-tdt-0.6b-v3</span> licensed under <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer" className="text-primary hover:underline">CC-BY-4.0</a>.
+              </p>
 
               {/* Elevated Application Warning Box */}
               <div className="p-3 rounded-lg border border-amber-500/30 bg-amber-500/10 text-amber-300 text-xs flex items-start space-x-2">
                 <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
                   <span className="font-semibold block mb-0.5">Elevated Windows Privilege Notice:</span>
-                  "Pasting into applications running as Administrator may require Murmur to also run as Administrator."
+                  Pasting into applications running as Administrator may require running WhisperType as Administrator.
                 </div>
               </div>
 

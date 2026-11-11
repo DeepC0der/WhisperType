@@ -1,0 +1,72 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "WhisperType Lite",
+  "version": "0.1.0",
+  "identifier": "com.whispertype.lite",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:1420",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "WhisperType Lite",
+        "width": 860,
+        "height": 660,
+        "minWidth": 640,
+        "minHeight": 480,
+        "resizable": true,
+        "visible": true,
+        "decorations": false,
+        "fullscreen": false,
+        "url": "index.html"
+      },
+      {
+        "label": "overlay",
+        "title": "WhisperType Lite Overlay",
+        "width": 240,
+        "height": 54,
+        "resizable": false,
+        "visible": false,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "url": "index.html#/overlay"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*; object-src 'none'; media-src 'self' blob: data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis",
+      "msi"
+    ],
+    "resources": {
+      "../src/assets/sounds/*": "./sounds/",
+      "target/release/onnxruntime.dll": "./onnxruntime.dll",
+      "target/release/onnxruntime_providers_shared.dll": "./onnxruntime_providers_shared.dll",
+      "target/release/sherpa-onnx-c-api.dll": "./sherpa-onnx-c-api.dll",
+      "target/release/sherpa-onnx-cxx-api.dll": "./sherpa-onnx-cxx-api.dll"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  }
+}

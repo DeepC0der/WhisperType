@@ -1,7 +1,11 @@
-use crate::asr::{AsrEngine, BenchmarkMetrics, ModelStatus, PostProcessConfig, TranscriptionResult};
+use crate::asr::{
+    get_managed_model_directory, import_model_from_folder, inspect_model_directory, AsrEngine,
+    BenchmarkMetrics, ModelStatus, ModelValidationResult, PostProcessConfig, TranscriptionResult,
+};
 use crate::audio::resample_and_normalize;
 use crate::storage::{Database, NewHistoryRecord, SettingsManager};
 use sherpa_onnx::Wave;
+use std::path::Path;
 use tauri::State;
 
 #[tauri::command]
@@ -12,6 +16,26 @@ pub fn get_model_status(engine: State<'_, AsrEngine>) -> Result<ModelStatus, Str
 #[tauri::command]
 pub fn load_model(engine: State<'_, AsrEngine>) -> Result<(), String> {
     engine.load_model().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn validate_model_path(path: String) -> Result<ModelValidationResult, String> {
+    Ok(inspect_model_directory(Path::new(&path)))
+}
+
+#[tauri::command]
+pub fn import_local_model(
+    source_folder: String,
+    engine: State<'_, AsrEngine>,
+) -> Result<String, String> {
+    let target = import_model_from_folder(Path::new(&source_folder))?;
+    engine.spawn_background_load();
+    Ok(target.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+pub fn get_managed_model_path() -> Result<String, String> {
+    Ok(get_managed_model_directory().to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -62,6 +86,8 @@ pub fn transcribe_audio_buffer(
             model_variant: Some(current_settings.model_variant),
             provider: Some(result.provider.clone()),
             inference_ms: Some(result.inference_ms),
+            refined_text: None,
+            mode: Some("normal".to_string()),
         };
 
         if let Err(e) = db.insert_history(new_record, current_settings.history_retention_max) {

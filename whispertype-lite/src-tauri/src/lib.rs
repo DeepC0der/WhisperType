@@ -1,0 +1,899 @@
+pub mod asr;
+pub mod audio;
+pub mod commands;
+pub mod dictation;
+pub mod logging;
+pub mod platform;
+pub mod sound;
+pub mod state;
+pub mod storage;
+pub mod tray;
+
+use asr::AsrEngine;
+use audio::{enumerate_input_devices, resample_and_normalize, AudioCapture, AudioDeviceInfo};
+use dictation::{DictationController, DictationMode};
+use platform::{Autostart, HotkeyBackend, OverlayWindowExt, TextInjector};
+use state::{AppState, AppStateManager, StateSnapshot};
+use storage::{
+    get_default_db_path, get_default_settings_path, AppSettings, Database, DictionaryRecord,
+    HistoryRecord, InsertionMode, NewDictionaryEntry, SettingsManager,
+};
+use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+#[cfg(target_os = "windows")]
+use platform::windows::{
+    HotkeyActionCallback, HotkeyModeController,
+    WindowsAutostart, WindowsHotkeyBackend, WindowsTextInjector,
+};
+
+#[cfg(not(target_os = "windows"))]
+use platform::linux::{LinuxAutostart, LinuxTextInjector};
+
+// ==========================================
+// STATE IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_state(state: State<'_, AppStateManager>) -> AppState {
+    state.get_state()
+}
+
+#[tauri::command]
+fn get_state_snapshot(state: State<'_, AppStateManager>) -> StateSnapshot {
+    state.get_snapshot()
+}
+
+#[tauri::command]
+fn transition_state(
+    next_state: AppState,
+    state: State<'_, AppStateManager>,
+    app: AppHandle,
+) -> Result<AppState, String> {
+    let result = state.transition_to(next_state)?;
+    let _ = app.emit("state-changed", state.get_snapshot());
+    Ok(result)
+}
+
+#[tauri::command]
+fn reset_state(state: State<'_, AppStateManager>, app: AppHandle) {
+    state.reset_to_idle();
+    let _ = app.emit("state-changed", state.get_snapshot());
+}
+
+// ==========================================
+// WINDOW & INJECTION IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn apply_overlay_styles(app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        overlay_win
+            .apply_overlay_styles()
+            .map_err(|e| e.to_string())?;
+        log::info!("Applied overlay styles to overlay window successfully.");
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn set_overlay_click_through(enabled: bool, app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        overlay_win
+            .set_click_through(enabled)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn position_overlay(anchor: Option<String>, size: Option<String>, app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        let settings = app.state::<SettingsManager>().get();
+        let anchor_str = anchor.unwrap_or(settings.overlay_position);
+        let size_str = size.unwrap_or(settings.overlay_size);
+        overlay_win
+            .position_overlay_with_size(&anchor_str, &size_str)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn show_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        overlay_win
+            .show_overlay()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        overlay_win
+            .hide_overlay()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn is_fullscreen_active(app: AppHandle) -> Result<bool, String> {
+    if let Some(overlay_win) = app.get_webview_window("overlay") {
+        Ok(overlay_win.is_fullscreen_active())
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn minimize_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.minimize().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_maximize_main_window(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let is_max = win.is_maximized().unwrap_or(false);
+        if is_max {
+            win.unmaximize().map_err(|e| e.to_string())?;
+            Ok(false)
+        } else {
+            win.maximize().map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn close_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_drag_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.start_dragging().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn inject_text(text: String, mode: Option<String>) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let injector = WindowsTextInjector::new();
+
+    #[cfg(not(target_os = "windows"))]
+    let injector = LinuxTextInjector::new();
+
+    match mode.as_deref() {
+        Some("unicode") => injector.inject_unicode(&text).map_err(|e| e.to_string()),
+        _ => injector.inject_paste(&text).map_err(|e| e.to_string()),
+    }
+}
+
+#[tauri::command]
+fn is_autostart_enabled() -> Result<bool, String> {
+    #[cfg(target_os = "windows")]
+    let autostart = WindowsAutostart::new();
+
+    #[cfg(not(target_os = "windows"))]
+    let autostart = LinuxAutostart::new();
+
+    autostart.is_enabled("Murmur").map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_autostart_enabled(enabled: bool) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let autostart = WindowsAutostart::new();
+
+    #[cfg(not(target_os = "windows"))]
+    let autostart = LinuxAutostart::new();
+
+    if enabled {
+        let current_exe = std::env::current_exe().map_err(|e| e.to_string())?;
+        autostart
+            .enable("Murmur", &current_exe.to_string_lossy())
+            .map_err(|e| e.to_string())
+    } else {
+        autostart.disable("Murmur").map_err(|e| e.to_string())
+    }
+}
+
+// ==========================================
+// AUDIO IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
+    enumerate_input_devices().map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct AudioCaptureSummary {
+    pub sample_count: usize,
+    pub duration_seconds: f32,
+    pub sample_rate: u32,
+    pub channels: u16,
+}
+
+#[tauri::command]
+fn start_audio_capture(
+    device_name: Option<String>,
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    cap.start_recording(device_name.as_deref(), Some(app))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn stop_audio_capture(
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+) -> Result<AudioCaptureSummary, String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    let captured = cap.stop_recording().map_err(|e| e.to_string())?;
+    let duration_seconds = (captured.samples.len() as f32)
+        / (captured.sample_rate as f32 * captured.channels.max(1) as f32);
+
+    // Resample and normalize to 16,000 Hz mono PCM
+    let resampled = resample_and_normalize(
+        &captured.samples,
+        captured.sample_rate,
+        captured.channels,
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(AudioCaptureSummary {
+        sample_count: resampled.len(),
+        duration_seconds,
+        sample_rate: 16000,
+        channels: 1,
+    })
+}
+
+#[tauri::command]
+fn cancel_audio_capture(
+    capture: State<'_, Arc<Mutex<AudioCapture>>>,
+) -> Result<(), String> {
+    let mut cap = capture.lock().map_err(|_| "Lock poisoned".to_string())?;
+    cap.cancel_recording();
+    Ok(())
+}
+
+#[tauri::command]
+fn start_mic_test(
+    device_name: Option<String>,
+    probe: State<'_, Arc<Mutex<crate::audio::AudioMonitorProbe>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut p = probe.lock().map_err(|_| "Probe lock poisoned".to_string())?;
+    p.start(device_name.as_deref(), app)
+}
+
+#[tauri::command]
+fn stop_mic_test(
+    probe: State<'_, Arc<Mutex<crate::audio::AudioMonitorProbe>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut p = probe.lock().map_err(|_| "Probe lock poisoned".to_string())?;
+    p.stop(&app)
+}
+
+#[tauri::command]
+fn start_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.start(&app, DictationMode::Normal)
+}
+
+#[tauri::command]
+fn stop_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.stop(&app)
+}
+
+#[tauri::command]
+fn cancel_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.cancel(&app)
+}
+
+#[tauri::command]
+fn toggle_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.toggle(&app)
+}
+
+#[tauri::command]
+fn play_audio_cue(cue: String, app: AppHandle) -> Result<(), String> {
+    crate::sound::play_audio_cue(&app, &cue)
+}
+
+// ==========================================
+// SETTINGS IPC COMMANDS
+// ==========================================
+
+use commands::asr::{
+    benchmark_model, get_managed_model_path, get_model_status, import_local_model, load_model,
+    transcribe_audio_buffer, validate_model_path,
+};
+
+#[tauri::command]
+fn get_settings(settings: State<'_, SettingsManager>) -> Result<AppSettings, String> {
+    Ok(settings.get())
+}
+
+#[tauri::command]
+fn update_settings(
+    new_settings: AppSettings,
+    settings: State<'_, SettingsManager>,
+    hotkey_service: State<'_, HotkeyService>,
+    asr_engine: State<'_, AsrEngine>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let old_settings = settings.get();
+    let settings_path = get_default_settings_path();
+
+    settings
+        .update_and_save(&settings_path, new_settings.clone())
+        .map_err(|e| e.to_string())?;
+
+    let need_reload_provider = asr_engine.set_requested_provider(&new_settings.performance_provider).unwrap_or(false);
+    let need_reload_threads = asr_engine.set_thread_count(new_settings.thread_count).unwrap_or(false);
+    asr_engine.set_idle_unload_minutes(new_settings.idle_unload_minutes);
+
+    if need_reload_provider || need_reload_threads {
+        let engine_clone = (*asr_engine).clone();
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = engine_clone.load_model() {
+                log::warn!("Asynchronous model reload after settings update failed: {e}");
+            }
+            let _ = app_clone.emit("model-status-changed", engine_clone.get_status());
+        });
+    }
+
+    // Resize overlay window natively if dimensions or position changed
+    if old_settings.overlay_size != new_settings.overlay_size
+        || old_settings.overlay_position != new_settings.overlay_position
+    {
+        if let Some(overlay_win) = app.get_webview_window("overlay") {
+            let _ = overlay_win.position_overlay_with_size(
+                &new_settings.overlay_position,
+                &new_settings.overlay_size,
+            );
+        }
+    }
+
+    // Update autostart if changed
+    if old_settings.launch_on_startup != new_settings.launch_on_startup {
+        let _ = set_autostart_enabled(new_settings.launch_on_startup);
+    }
+
+    // Rebind hotkey if settings changed
+    if old_settings.hotkey != new_settings.hotkey
+        || old_settings.hotkey_mode != new_settings.hotkey_mode
+    {
+        hotkey_service.rebind(
+            &app,
+            &old_settings,
+            &new_settings,
+        )?;
+    }
+
+    let _ = app.emit("settings-changed", &new_settings);
+
+    Ok(())
+}
+
+// ==========================================
+// HISTORY IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_history(
+    limit: Option<usize>,
+    offset: Option<usize>,
+    db: State<'_, Database>,
+) -> Result<Vec<HistoryRecord>, String> {
+    db.get_history(limit, offset).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn update_history_entry(id: String, text: String, db: State<'_, Database>, app: AppHandle) -> Result<bool, String> {
+    let res = db.update_history(&id, &text).map_err(|e| e.to_string())?;
+    crate::tray::update_tray_menu(&app);
+    Ok(res)
+}
+
+#[tauri::command]
+fn delete_history(id: String, db: State<'_, Database>, app: AppHandle) -> Result<bool, String> {
+    let _ = crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id);
+    let res = db.delete_history(&id).map_err(|e| e.to_string())?;
+    crate::tray::update_tray_menu(&app);
+    Ok(res)
+}
+
+#[tauri::command]
+fn clear_history(db: State<'_, Database>, app: AppHandle) -> Result<usize, String> {
+    let _ = crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir());
+    let res = db.clear_history().map_err(|e| e.to_string())?;
+    crate::tray::update_tray_menu(&app);
+    Ok(res)
+}
+
+#[tauri::command]
+fn export_history(db: State<'_, Database>) -> Result<String, String> {
+    db.export_history_json().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn reinsert_text(text: String, settings: State<'_, SettingsManager>, app: AppHandle) -> Result<(), String> {
+    let sm = app.state::<AppStateManager>();
+    let _ = sm.transition_to(AppState::INSERTING);
+    let _ = app.emit("state-changed", sm.get_snapshot());
+
+    let s = settings.get();
+    let inject_mode = match s.insertion_mode {
+        InsertionMode::UnicodeTyping => Some("unicode".to_string()),
+        InsertionMode::PasteWithRestore => None,
+    };
+
+    let res = inject_text(text.clone(), inject_mode);
+    if let Err(e) = &res {
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(&text);
+        }
+        log::warn!("Reinsert text failed ({e}), copied to clipboard instead");
+    }
+
+    sm.reset_to_idle();
+    let _ = app.emit("state-changed", sm.get_snapshot());
+    res
+}
+
+// ==========================================
+// DICTIONARY IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn get_dictionary(db: State<'_, Database>) -> Result<Vec<DictionaryRecord>, String> {
+    db.get_dictionary().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_dictionary_entries(db: State<'_, Database>) -> Result<Vec<DictionaryRecord>, String> {
+    db.get_dictionary().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn add_dictionary_entry(
+    entry: NewDictionaryEntry,
+    db: State<'_, Database>,
+) -> Result<DictionaryRecord, String> {
+    db.insert_dictionary(entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn set_dictionary_entry(
+    id: Option<String>,
+    find_text: String,
+    replace_text: String,
+    is_case_sensitive: Option<bool>,
+    db: State<'_, Database>,
+) -> Result<DictionaryRecord, String> {
+    if let Some(existing_id) = id {
+        let rec = DictionaryRecord {
+            id: existing_id,
+            find_text,
+            replace_text,
+            is_case_sensitive: is_case_sensitive.unwrap_or(false),
+            created_at: chrono::Utc::now().to_rfc3339(),
+        };
+        db.update_dictionary(rec.clone()).map_err(|e| e.to_string())?;
+        Ok(rec)
+    } else {
+        db.insert_dictionary(NewDictionaryEntry {
+            find_text,
+            replace_text,
+            is_case_sensitive,
+        }).map_err(|e| e.to_string())
+    }
+}
+
+#[tauri::command]
+fn update_dictionary_entry(
+    entry: DictionaryRecord,
+    db: State<'_, Database>,
+) -> Result<bool, String> {
+    db.update_dictionary(entry).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_dictionary_entry(id: String, db: State<'_, Database>) -> Result<bool, String> {
+    db.delete_dictionary(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn import_dictionary(
+    entries: Vec<NewDictionaryEntry>,
+    db: State<'_, Database>,
+) -> Result<usize, String> {
+    let mut count = 0;
+    for entry in entries {
+        if !entry.find_text.trim().is_empty() && db.insert_dictionary(entry).is_ok() {
+            count += 1;
+        }
+    }
+    Ok(count)
+}
+
+// ==========================================
+// SMART STRUCTURE PREVIEW IPC COMMAND
+// ==========================================
+
+#[tauri::command]
+fn apply_structure_preview(
+    text: String,
+    config: crate::asr::StructureConfig,
+) -> Result<crate::asr::StructureResult, String> {
+    if text.trim().is_empty() {
+        return Err("Input text is empty".to_string());
+    }
+    let word_spans = crate::asr::build_word_spans(&text, &[], None, None);
+    Ok(crate::asr::apply_smart_structure(&text, &word_spans, &config))
+}
+
+// ==========================================
+// DIAGNOSTICS & SYSTEM IPC COMMANDS
+// ==========================================
+
+#[tauri::command]
+fn copy_diagnostics(settings: State<'_, SettingsManager>) -> Result<String, String> {
+    let report = logging::generate_diagnostics_report(&settings.get(), &logging::get_default_log_dir());
+    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+        let _ = clipboard.set_text(&report);
+    }
+    Ok(report)
+}
+
+#[tauri::command]
+fn open_system_url(url: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .creation_flags(CREATE_NO_WINDOW)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+fn open_log_dir() -> Result<(), String> {
+    let dir = logging::get_default_log_dir();
+    let dir_str = dir.to_string_lossy().to_string();
+    open_system_url(dir_str)
+}
+
+#[tauri::command]
+fn list_recordings() -> Result<Vec<crate::storage::SavedRecordingInfo>, String> {
+    crate::storage::list_saved_recordings(&crate::storage::get_default_recordings_dir())
+}
+
+#[tauri::command]
+fn get_recording_audio(id: String) -> Result<Vec<u8>, String> {
+    crate::storage::get_recording_wav_bytes(&crate::storage::get_default_recordings_dir(), &id)
+}
+
+#[tauri::command]
+fn delete_recording(id: String) -> Result<bool, String> {
+    crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id)
+}
+
+#[tauri::command]
+fn clear_recordings() -> Result<usize, String> {
+    crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir())
+}
+
+#[tauri::command]
+fn open_recordings_dir() -> Result<(), String> {
+    let dir = crate::storage::get_default_recordings_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    open_system_url(dir.to_string_lossy().to_string())
+}
+
+// ==========================================
+// HOTKEY SERVICE
+// ==========================================
+
+pub struct HotkeyService {
+    #[cfg(target_os = "windows")]
+    backend: Arc<Mutex<WindowsHotkeyBackend>>,
+    #[cfg(target_os = "windows")]
+    mode_controller: Arc<Mutex<HotkeyModeController>>,
+}
+
+pub fn start_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().start(app, DictationMode::Normal)
+}
+
+pub fn stop_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().stop(app)
+}
+
+pub fn cancel_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().cancel(app)
+}
+
+pub fn toggle_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().toggle(app)
+}
+
+#[cfg(target_os = "windows")]
+fn create_hotkey_action_callback(
+    app: AppHandle,
+    mode_controller: Arc<Mutex<HotkeyModeController>>,
+) -> HotkeyActionCallback {
+    Arc::new(move |action| {
+        let sm = app.state::<AppStateManager>();
+        let current = sm.get_state();
+        let next_opt = {
+            let mc = mode_controller.lock().unwrap();
+            mc.handle_action(action, current)
+        };
+
+        if let Some(next) = next_opt {
+            match next {
+                AppState::RECORDING => {
+                    let _ = start_dictation_pipeline(&app);
+                }
+                AppState::TRANSCRIBING => {
+                    let _ = stop_dictation_pipeline(&app);
+                }
+                AppState::IDLE => {
+                    let _ = cancel_dictation_pipeline(&app);
+                }
+                _ => {}
+            }
+        }
+    })
+}
+
+impl HotkeyService {
+    pub fn new(app_handle: &AppHandle, settings: &AppSettings) -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            let mut backend = WindowsHotkeyBackend::new();
+            let mode_controller = Arc::new(Mutex::new(HotkeyModeController::new(settings.hotkey_mode)));
+            let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&mode_controller));
+
+            if let Err(e) = backend.register_hotkey_action(&settings.hotkey, action_cb) {
+                log::error!("Failed to register initial hotkey '{}': {}", settings.hotkey, e);
+            }
+            if let Err(e) = backend.start_listening() {
+                log::error!("Failed to start hotkey listener thread: {e}");
+            }
+
+            Self {
+                backend: Arc::new(Mutex::new(backend)),
+                mode_controller,
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (app_handle, settings);
+            Self {}
+        }
+    }
+
+    pub fn rebind(
+        &self,
+        app_handle: &AppHandle,
+        old_settings: &AppSettings,
+        new_settings: &AppSettings,
+    ) -> Result<(), String> {
+        #[cfg(target_os = "windows")]
+        {
+            let mut backend = self.backend.lock().map_err(|_| "Backend lock poisoned")?;
+            self.mode_controller
+                .lock()
+                .map_err(|_| "Controller lock poisoned")?
+                .set_mode(new_settings.hotkey_mode);
+
+            let _ = backend.unregister_hotkey(&old_settings.hotkey);
+            let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&self.mode_controller));
+
+            backend
+                .register_hotkey_action(&new_settings.hotkey, action_cb)
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (app_handle, old_settings, new_settings);
+        }
+        Ok(())
+    }
+}
+
+// ==========================================
+// APPLICATION LIFECYCLE & RUN ENTRYPOINT
+// ==========================================
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // 1. Initialize logging
+    let log_dir = logging::get_default_log_dir();
+    let _log_guard = logging::init_logging(&log_dir).ok();
+
+    // 2. Initialize settings
+    let settings_path = get_default_settings_path();
+    let settings_manager = SettingsManager::load_from_file(&settings_path).unwrap_or_else(|e| {
+        log::error!("Failed to load settings from file: {e}. Using defaults.");
+        SettingsManager::default()
+    });
+
+    // 3. Initialize SQLite database
+    let db_path = get_default_db_path();
+    let database = Database::open(&db_path).unwrap_or_else(|e| {
+        log::error!("Failed to open history.db: {e}. Falling back to in-memory db.");
+        Database::in_memory().expect("In-memory DB fallback failed")
+    });
+
+    // 4. Audio capture buffer (allocated only during active recording)
+    let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
+
+    // 5. Initialize ASR engine and spawn background loading
+    let initial_settings = settings_manager.get();
+    let asr_engine = AsrEngine::new_with_threads(
+        &initial_settings.performance_provider,
+        initial_settings.idle_unload_minutes,
+        initial_settings.thread_count,
+    );
+    asr_engine.spawn_background_load();
+
+    tauri::Builder::default()
+        .on_window_event(|window, event| {
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
+                }
+                _ => {}
+            }
+        })
+        .manage(AppStateManager::new())
+        .manage(database)
+        .manage(settings_manager.clone())
+        .manage(audio_capture)
+        .manage(Arc::new(Mutex::new(crate::audio::AudioMonitorProbe::new())))
+        .manage(asr_engine)
+        .manage(DictationController::new())
+        .invoke_handler(tauri::generate_handler![
+            get_state,
+            get_state_snapshot,
+            transition_state,
+            reset_state,
+            apply_overlay_styles,
+            set_overlay_click_through,
+            position_overlay,
+            show_overlay,
+            hide_overlay,
+            is_fullscreen_active,
+            minimize_main_window,
+            toggle_maximize_main_window,
+            close_main_window,
+            start_drag_main_window,
+            inject_text,
+            is_autostart_enabled,
+            set_autostart_enabled,
+            get_audio_devices,
+            start_audio_capture,
+            stop_audio_capture,
+            cancel_audio_capture,
+            start_mic_test,
+            stop_mic_test,
+            start_recording,
+            stop_recording,
+            cancel_recording,
+            toggle_recording,
+            play_audio_cue,
+            reinsert_text,
+            update_history_entry,
+            get_dictionary_entries,
+            set_dictionary_entry,
+            import_dictionary,
+            open_system_url,
+            open_log_dir,
+            open_recordings_dir,
+            list_recordings,
+            get_recording_audio,
+            delete_recording,
+            clear_recordings,
+            get_settings,
+            update_settings,
+            get_history,
+            delete_history,
+            clear_history,
+            export_history,
+            get_dictionary,
+            add_dictionary_entry,
+            update_dictionary_entry,
+            delete_dictionary_entry,
+            copy_diagnostics,
+            get_model_status,
+            load_model,
+            validate_model_path,
+            import_local_model,
+            get_managed_model_path,
+            transcribe_audio_buffer,
+            benchmark_model,
+            apply_structure_preview,
+        ])
+        .setup(move |app| {
+            // Initialize System Tray
+            if let Err(e) = tray::init_tray(&app.handle().clone()) {
+                log::warn!("Could not initialize system tray: {e}");
+            }
+
+            // Apply overlay styles and initial positioning to overlay window if it exists at startup
+            if let Some(overlay_window) = app.get_webview_window("overlay") {
+                if let Err(e) = overlay_window.apply_overlay_styles() {
+                    log::warn!("Could not apply overlay styles on startup: {e}");
+                }
+                let current_settings = settings_manager.get();
+                let _ = overlay_window.position_overlay_with_size(
+                    &current_settings.overlay_position,
+                    &current_settings.overlay_size,
+                );
+            }
+
+            // Initialize HotkeyService wired to AppState and AudioCapture
+            let current_settings = settings_manager.get();
+            let hotkey_service = HotkeyService::new(
+                &app.handle().clone(),
+                &current_settings,
+            );
+            app.manage(hotkey_service);
+
+            // Preload audio cues for sub-millisecond initial playback
+            crate::sound::preload_audio_cues(app.handle());
+
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building murmur tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "windows")]
+                {
+                    crate::platform::windows::reset_ctrl_win_state();
+                    crate::platform::windows::reset_mouse_hook_state();
+                }
+                let _ = cancel_dictation_pipeline(app_handle);
+            }
+        });
+}

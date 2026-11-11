@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Murmur",
+  "productName": "WhisperType",
   "version": "0.1.0",
-  "identifier": "com.murmur.app",
+  "identifier": "com.whispertype.desktop",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -13,19 +13,20 @@
     "windows": [
       {
         "label": "main",
-        "title": "Murmur",
-        "width": 800,
-        "height": 600,
-        "minWidth": 600,
-        "minHeight": 450,
+        "title": "WhisperType",
+        "width": 860,
+        "height": 660,
+        "minWidth": 640,
+        "minHeight": 480,
         "resizable": true,
         "visible": true,
+        "decorations": false,
         "fullscreen": false,
         "url": "index.html"
       },
       {
         "label": "overlay",
-        "title": "Murmur Overlay",
+        "title": "WhisperType Overlay",
         "width": 240,
         "height": 54,
         "resizable": false,
@@ -39,7 +40,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'; object-src 'none'; media-src 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* http://localhost:*; object-src 'none'; media-src 'self' blob: data:"
     }
   },
   "bundle": {

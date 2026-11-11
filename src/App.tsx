@@ -1,17 +1,32 @@
-import React from "react";
+import React, { useState } from "react";
 import { HashRouter as Router, Routes, Route, Link, useLocation } from "react-router-dom";
 import { HomeView } from "@/components/views/HomeView";
 import { HistoryView } from "@/components/views/HistoryView";
 import { DictionaryView } from "@/components/views/DictionaryView";
 import { SettingsView } from "@/components/views/SettingsView";
 import { OverlayView } from "@/components/views/OverlayView";
-import { Mic, History, BookA, Settings, ShieldCheck } from "lucide-react";
+import {
+  Mic,
+  History,
+  BookA,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Minus,
+  Square,
+  Copy,
+  X,
+} from "lucide-react";
 import { useAppStore } from "@/store/useAppStore";
-
+import { THEMES, applyThemeToDocument } from "@/lib/theme";
 import { OnboardingModal } from "@/components/views/OnboardingModal";
+
+const isTauri = () => typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const location = useLocation();
+  const { activeDictationMode, setActiveDictationMode, settings, saveSettings } = useAppStore();
+  const [isMaximized, setIsMaximized] = useState(false);
 
   const navItems = [
     { path: "/", label: "Dictate", icon: Mic },
@@ -20,24 +35,102 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     { path: "/settings", label: "Settings", icon: Settings },
   ];
 
+  const handleHeaderMouseDown = async (e: React.MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, select, [data-no-drag]")) {
+      return;
+    }
+    if (e.button === 0 && isTauri()) {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("start_drag_main_window");
+      } catch {
+        // Ignore if outside Tauri
+      }
+    }
+  };
+
+  const handleHeaderDoubleClick = async (e: React.MouseEvent<HTMLElement>) => {
+    const target = e.target as HTMLElement;
+    if (target.closest("button, a, input, select, [data-no-drag]")) {
+      return;
+    }
+    await handleToggleMaximize();
+  };
+
+  const handleMinimize = async () => {
+    if (!isTauri()) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("minimize_main_window");
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleToggleMaximize = async () => {
+    if (!isTauri()) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const maxState = await invoke<boolean>("toggle_maximize_main_window");
+      setIsMaximized(Boolean(maxState));
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleClose = async () => {
+    if (!isTauri()) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("close_main_window");
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleQuickThemeSwitch = (themeId: string) => {
+    applyThemeToDocument(themeId);
+    saveSettings({ theme: themeId });
+  };
+
+  const quickThemes = THEMES.filter((t) => t.id !== "system");
+
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden scanlines-overlay">
-      {/* App Header */}
-      <header className="h-14 border-b border-border/80 bg-card/70 backdrop-blur px-6 flex items-center justify-between shrink-0 select-none pixel-border z-20">
+    <div className="h-screen flex flex-col bg-background text-foreground overflow-hidden scanlines-overlay border border-border/80 rounded-none">
+      {/* Integrated Matte Application Titlebar & Navigation Frame */}
+      <header
+        data-tauri-drag-region
+        onMouseDown={handleHeaderMouseDown}
+        onDoubleClick={handleHeaderDoubleClick}
+        className="h-14 border-b border-border/80 bg-card/95 backdrop-blur-md px-4 flex items-center justify-between shrink-0 select-none z-20 cursor-default"
+      >
+        {/* Left: Brand Identity */}
         <div className="flex items-center space-x-3">
-          <div className="h-8 w-8 rounded-md bg-primary/10 border border-primary/40 flex items-center justify-center glow-box">
-            <Mic className="h-4 w-4 text-primary" />
-          </div>
-          <div>
-            <h1 className="font-pixel text-sm tracking-wider font-bold uppercase text-foreground phosphor-glow-subtle">
-              MURMUR
-            </h1>
-            <p className="text-[10px] text-muted-foreground">Offline Local Dictation</p>
+          <img
+            src="/logo.png"
+            alt="WhisperType logo"
+            className="h-8 w-8 rounded-lg shadow-sm object-contain"
+          />
+          <div className="leading-tight">
+            <div className="flex items-center gap-2">
+              <h1 className="font-sans text-sm tracking-tight font-bold text-foreground">
+                WhisperType
+              </h1>
+              <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/12 text-primary border border-primary/30 hidden md:inline-block">
+                Local AI
+              </span>
+            </div>
+            <p className="text-[10px] text-muted-foreground">100% Offline Voice Dictation</p>
           </div>
         </div>
 
-        {/* Navigation Tabs */}
-        <nav className="flex items-center space-x-1 bg-secondary/50 p-1 rounded-lg border border-border/50">
+        {/* Center: Matte Segmented Navigation Tabs */}
+        <nav
+          aria-label="Primary"
+          data-no-drag
+          className="flex items-center space-x-1 bg-secondary/70 p-1 rounded-xl border border-border/70"
+        >
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = location.pathname === item.path;
@@ -45,25 +138,109 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
                   isActive
-                    ? "bg-background text-foreground shadow-sm pixel-border"
-                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/60"
+                    ? "bg-card text-foreground shadow-sm border border-border/80"
+                    : "text-muted-foreground hover:text-foreground hover:bg-secondary"
                 }`}
               >
-                <Icon className="h-3.5 w-3.5" />
+                <Icon className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>{item.label}</span>
               </Link>
             );
           })}
         </nav>
 
-        {/* Status Indicator */}
-        <div className="flex items-center space-x-2 text-xs">
-          <ShieldCheck className="h-4 w-4 text-primary" />
-          <span className="font-pixel text-[10px] text-muted-foreground uppercase hidden sm:inline phosphor-glow-subtle">
-            100% OFFLINE
-          </span>
+        {/* Right: Quick Theme Pills, Mode Badge & Integrated Window Controls */}
+        <div className="flex items-center space-x-2 text-xs" data-no-drag>
+          {/* Website-style Quick Theme Dots */}
+          <div
+            className="hidden lg:flex items-center gap-1 bg-secondary/70 border border-border/70 rounded-full px-2 py-1"
+            role="group"
+            aria-label="Quick theme switcher"
+          >
+            {quickThemes.map((t) => {
+              const isCurrent = (settings.theme || "dark") === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => handleQuickThemeSwitch(t.id)}
+                  aria-label={`Switch theme to ${t.name}`}
+                  aria-pressed={isCurrent}
+                  title={`${t.name}${t.category === "retro" ? " (Optional Retro)" : " (Matte)"}`}
+                  className={`h-3.5 w-3.5 rounded-full transition-transform cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${
+                    isCurrent ? "scale-125 ring-2 ring-foreground/80" : "opacity-75 hover:opacity-100 hover:scale-110"
+                  }`}
+                  style={{
+                    backgroundColor: t.preview.primary,
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {settings.professional_mode_enabled && (
+            <button
+              type="button"
+              onClick={() => {
+                const next = activeDictationMode === "professional" ? "normal" : "professional";
+                setActiveDictationMode(next);
+              }}
+              title="Switch between Standard Dictation and Pro AI Note-Structuring Mode"
+              className={`hidden sm:flex items-center space-x-1.5 px-2.5 py-1 rounded-full border text-[10px] font-semibold tracking-wide uppercase transition-all cursor-pointer ${
+                activeDictationMode === "professional"
+                  ? "bg-status-refining/20 text-status-refining border-status-refining/50"
+                  : "bg-secondary/70 text-muted-foreground border-border/70 hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="h-3 w-3" aria-hidden="true" />
+              <span>{activeDictationMode === "professional" ? "Pro AI" : "Standard"}</span>
+            </button>
+          )}
+
+          <div
+            className="hidden xl:flex items-center space-x-1 px-2 py-1 rounded-full bg-secondary/50 border border-border/60"
+            title="Zero network audio transmission"
+          >
+            <ShieldCheck className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+            <span className="text-[10px] font-medium text-muted-foreground">Air-Gapped</span>
+          </div>
+
+          {/* Integrated Window Controls (Minimize, Maximize/Restore, Close) */}
+          <div className="flex items-center pl-2 ml-1 border-l border-border/70 space-x-1">
+            <button
+              type="button"
+              onClick={handleMinimize}
+              aria-label="Minimize window"
+              title="Minimize"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/90 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              <Minus className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              aria-label={isMaximized ? "Restore window" : "Maximize window"}
+              title={isMaximized ? "Restore" : "Maximize"}
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-secondary/90 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary"
+            >
+              {isMaximized ? (
+                <Copy className="h-3 w-3" aria-hidden="true" />
+              ) : (
+                <Square className="h-3 w-3" aria-hidden="true" />
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={handleClose}
+              aria-label="Close to system tray"
+              title="Close to Tray"
+              className="h-7 w-7 rounded-lg flex items-center justify-center text-muted-foreground hover:text-white hover:bg-red-500/90 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-500"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </header>
 
@@ -115,12 +292,30 @@ export const App: React.FC = () => {
               useAppStore.getState().applySettingsUpdate(event.payload);
             }
           );
+          const unlistenProfessional = listen<string>("professional-transcript-ready", (event) => {
+            useAppStore.getState().setLastTranscript(event.payload);
+            if (useAppStore.getState().settings.persistent_history) {
+              useAppStore.getState().fetchHistory();
+            } else {
+              useAppStore.getState().addSessionTranscript(event.payload);
+            }
+          });
+          const unlistenProfError = listen<string>("professional-error", (event) => {
+            useAppStore.getState().setProfessionalError(event.payload);
+            setTimeout(() => useAppStore.getState().setProfessionalError(null), 5000);
+          });
+          const unlistenMode = listen<"normal" | "professional">("dictation-mode-changed", (event) => {
+            useAppStore.getState().setActiveDictationMode(event.payload);
+          });
 
           unlistenAll = () => {
             unlistenMic.then((fn) => fn()).catch(() => {});
             unlistenState.then((fn) => fn()).catch(() => {});
             unlistenTranscript.then((fn) => fn()).catch(() => {});
             unlistenSettings.then((fn) => fn()).catch(() => {});
+            unlistenProfessional.then((fn) => fn()).catch(() => {});
+            unlistenProfError.then((fn) => fn()).catch(() => {});
+            unlistenMode.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});

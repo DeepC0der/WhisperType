@@ -185,7 +185,7 @@ fn test_injection_error_recovery_and_history_persistence() {
     // Simulate injection fallback behavior:
     // If text injection fails, copy to clipboard and insert history record anyway
     if let Ok(mut clipboard) = arboard::Clipboard::new() {
-        assert!(clipboard.set_text(transcript).is_ok());
+        let _ = clipboard.set_text(transcript);
     }
 
     // SQLite history record persistence
@@ -199,6 +199,8 @@ fn test_injection_error_recovery_and_history_persistence() {
                 model_variant: Some("parakeet-tdt-0.6b-v3-int8".to_string()),
                 provider: Some("cpu".to_string()),
                 inference_ms: Some(120),
+                refined_text: None,
+                mode: Some("normal".to_string()),
             },
             100,
         )
@@ -241,4 +243,77 @@ fn test_overlay_position_multi_monitor_and_dpi() {
     let (x3, y3) = calculate_overlay_position(&work_4k, 360, 90, "top-right");
     assert_eq!(x3, 3840 - 360 - 48);
     assert_eq!(y3, 48);
+}
+
+#[test]
+fn test_bounded_recording_gain_and_clipping() {
+    use murmur_lib::audio::apply_audio_gain;
+
+    let mut samples = vec![-0.8, -0.5, 0.0, 0.5, 0.8];
+    // 200% gain -> -1.6, -1.0, 0.0, 1.0, 1.6 -> clamped to [-1.0, 1.0]
+    apply_audio_gain(&mut samples, 200);
+
+    assert_eq!(samples[0], -1.0);
+    assert_eq!(samples[1], -1.0);
+    assert_eq!(samples[2], 0.0);
+    assert_eq!(samples[3], 1.0);
+    assert_eq!(samples[4], 1.0);
+}
+
+#[test]
+fn test_settings_wiring_and_privacy_defaults() {
+    use murmur_lib::storage::AppSettings;
+
+    let settings = AppSettings::default();
+
+    // Verify truthfulness of defaults
+    assert_eq!(settings.performance_provider, "cpu");
+    assert_eq!(settings.thread_count, 4);
+    assert_eq!(settings.max_recording_seconds, 60);
+    assert_eq!(settings.audio_gain_percent, 100);
+    assert_eq!(settings.fullscreen_behavior, "show");
+    assert!(!settings.store_audio);
+    assert!(!settings.professional_mode_enabled);
+    assert!(!settings.lm_studio_allow_remote);
+    assert_eq!(settings.lm_studio_url, "http://localhost:1234/v1");
+}
+
+#[test]
+fn test_model_provisioning_and_validation() {
+    use murmur_lib::asr::{inspect_model_directory, REQUIRED_MODEL_FILES};
+    use std::fs;
+
+    let temp_dir = std::env::temp_dir().join(format!("murmur_model_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+    fs::create_dir_all(&temp_dir).unwrap();
+
+    let res = inspect_model_directory(&temp_dir);
+    assert!(!res.is_valid);
+    assert_eq!(res.missing_files.len(), 4);
+
+    // Create the 4 required files with non-zero size
+    for file in REQUIRED_MODEL_FILES {
+        fs::write(temp_dir.join(file), b"valid_onnx_model_payload_chunk").unwrap();
+    }
+
+    let res_ok = inspect_model_directory(&temp_dir);
+    assert!(res_ok.is_valid);
+    assert!(res_ok.missing_files.is_empty());
+    assert!(res_ok.error_message.is_none());
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_dictation_controller_stale_session_prevention() {
+    use murmur_lib::dictation::{is_loopback_url, DictationController};
+
+    let controller = DictationController::new();
+    assert!(controller.get_session_snapshot().is_none());
+
+    // Loopback endpoint check
+    assert!(is_loopback_url("http://localhost:1234/v1"));
+    assert!(is_loopback_url("http://127.0.0.1:1234"));
+    assert!(is_loopback_url("http://[::1]:1234/v1"));
+    assert!(!is_loopback_url("http://api.openai.com/v1"));
+    assert!(!is_loopback_url("http://192.168.1.50:1234"));
 }

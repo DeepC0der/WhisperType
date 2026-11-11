@@ -1,6 +1,8 @@
 pub mod asr;
 pub mod audio;
 pub mod commands;
+pub mod dictation;
+pub mod llm;
 pub mod logging;
 pub mod platform;
 pub mod sound;
@@ -8,21 +10,22 @@ pub mod state;
 pub mod storage;
 pub mod tray;
 
-use asr::{AsrEngine, PostProcessConfig};
+use asr::AsrEngine;
 use audio::{enumerate_input_devices, resample_and_normalize, AudioCapture, AudioDeviceInfo};
+use dictation::{is_loopback_url, DictationController, DictationMode};
 use platform::{Autostart, HotkeyBackend, OverlayWindowExt, TextInjector};
 use state::{AppState, AppStateManager, StateSnapshot};
 use storage::{
     get_default_db_path, get_default_settings_path, AppSettings, Database, DictionaryRecord,
-    HistoryRecord, HotkeyMode, InsertionMode, NewDictionaryEntry, NewHistoryRecord, SettingsManager,
+    HistoryRecord, InsertionMode, NewDictionaryEntry, SettingsManager,
 };
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[cfg(target_os = "windows")]
 use platform::windows::{
-    HotkeyActionCallback, HotkeyModeController, WindowsAutostart,
-    WindowsHotkeyBackend, WindowsTextInjector,
+    set_ctrl_win_callback, set_ctrl_win_enabled, HotkeyAction, HotkeyActionCallback, HotkeyModeController,
+    WindowsAutostart, WindowsHotkeyBackend, WindowsMouseHook, WindowsTextInjector, MouseButton, MouseAction,
 };
 
 #[cfg(not(target_os = "windows"))]
@@ -85,11 +88,13 @@ fn set_overlay_click_through(enabled: bool, app: AppHandle) -> Result<(), String
 }
 
 #[tauri::command]
-fn position_overlay(anchor: Option<String>, app: AppHandle) -> Result<(), String> {
+fn position_overlay(anchor: Option<String>, size: Option<String>, app: AppHandle) -> Result<(), String> {
     if let Some(overlay_win) = app.get_webview_window("overlay") {
-        let anchor_str = anchor.unwrap_or_else(|| "bottom-center".to_string());
+        let settings = app.state::<SettingsManager>().get();
+        let anchor_str = anchor.unwrap_or(settings.overlay_position);
+        let size_str = size.unwrap_or(settings.overlay_size);
         overlay_win
-            .position_overlay(&anchor_str)
+            .position_overlay_with_size(&anchor_str, &size_str)
             .map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -122,6 +127,46 @@ fn is_fullscreen_active(app: AppHandle) -> Result<bool, String> {
     } else {
         Ok(false)
     }
+}
+
+#[tauri::command]
+fn minimize_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.minimize().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_maximize_main_window(app: AppHandle) -> Result<bool, String> {
+    if let Some(win) = app.get_webview_window("main") {
+        let is_max = win.is_maximized().unwrap_or(false);
+        if is_max {
+            win.unmaximize().map_err(|e| e.to_string())?;
+            Ok(false)
+        } else {
+            win.maximize().map_err(|e| e.to_string())?;
+            Ok(true)
+        }
+    } else {
+        Ok(false)
+    }
+}
+
+#[tauri::command]
+fn close_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.hide().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn start_drag_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("main") {
+        win.start_dragging().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -230,23 +275,89 @@ fn cancel_audio_capture(
 }
 
 #[tauri::command]
-fn start_recording(app: AppHandle) -> Result<(), String> {
-    start_dictation_pipeline(&app)
+fn start_mic_test(
+    device_name: Option<String>,
+    probe: State<'_, Arc<Mutex<crate::audio::AudioMonitorProbe>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut p = probe.lock().map_err(|_| "Probe lock poisoned".to_string())?;
+    p.start(device_name.as_deref(), app)
 }
 
 #[tauri::command]
-fn stop_recording(app: AppHandle) -> Result<(), String> {
-    stop_dictation_pipeline(&app)
+fn stop_mic_test(
+    probe: State<'_, Arc<Mutex<crate::audio::AudioMonitorProbe>>>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let mut p = probe.lock().map_err(|_| "Probe lock poisoned".to_string())?;
+    p.stop(&app)
 }
 
 #[tauri::command]
-fn cancel_recording(app: AppHandle) -> Result<(), String> {
-    cancel_dictation_pipeline(&app)
+fn start_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.start(&app, DictationMode::Normal)
 }
 
 #[tauri::command]
-fn toggle_recording(app: AppHandle) -> Result<(), String> {
-    toggle_dictation_pipeline(&app)
+fn stop_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.stop(&app)
+}
+
+#[tauri::command]
+fn cancel_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.cancel(&app)
+}
+
+#[tauri::command]
+fn toggle_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.toggle(&app)
+}
+
+#[tauri::command]
+fn start_professional_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.start(&app, DictationMode::Professional)
+}
+
+#[tauri::command]
+fn stop_professional_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.stop(&app)
+}
+
+#[tauri::command]
+fn cancel_professional_recording(app: AppHandle, controller: State<'_, DictationController>) -> Result<(), String> {
+    controller.cancel(&app)
+}
+
+#[tauri::command]
+fn get_lm_studio_models(settings: State<'_, SettingsManager>) -> Result<Vec<String>, String> {
+    let s = settings.get();
+    if !is_loopback_url(&s.lm_studio_url) && !s.lm_studio_allow_remote {
+        return Err("Only local loopback URLs (localhost, 127.0.0.1) are allowed without explicit confirmation.".to_string());
+    }
+    let provider = crate::llm::LmStudioProvider::new(s.lm_studio_url.clone());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    rt.block_on(provider.list_models(10)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn test_lm_studio_connection(settings: State<'_, SettingsManager>) -> Result<bool, String> {
+    let s = settings.get();
+    if !is_loopback_url(&s.lm_studio_url) && !s.lm_studio_allow_remote {
+        log::warn!("Rejected LM Studio test connection to non-loopback URL: {}", s.lm_studio_url);
+        return Err("LM Studio URL must be a local loopback address (e.g. http://localhost:1234/v1) or remote access must be explicitly enabled.".to_string());
+    }
+    let provider = crate::llm::LmStudioProvider::new(s.lm_studio_url.clone());
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())?;
+    match rt.block_on(provider.test_connection(5)) {
+        Ok(()) => Ok(true),
+        Err(e) => { log::info!("LM Studio connection test failed: {e}"); Ok(false) }
+    }
 }
 
 #[tauri::command]
@@ -258,7 +369,10 @@ fn play_audio_cue(cue: String, app: AppHandle) -> Result<(), String> {
 // SETTINGS IPC COMMANDS
 // ==========================================
 
-use commands::asr::{benchmark_model, get_model_status, load_model, transcribe_audio_buffer};
+use commands::asr::{
+    benchmark_model, get_managed_model_path, get_model_status, import_local_model, load_model,
+    transcribe_audio_buffer, validate_model_path,
+};
 
 #[tauri::command]
 fn get_settings(settings: State<'_, SettingsManager>) -> Result<AppSettings, String> {
@@ -280,23 +394,49 @@ fn update_settings(
         .update_and_save(&settings_path, new_settings.clone())
         .map_err(|e| e.to_string())?;
 
-    let _ = asr_engine.set_requested_provider(&new_settings.performance_provider);
+    let need_reload_provider = asr_engine.set_requested_provider(&new_settings.performance_provider).unwrap_or(false);
+    let need_reload_threads = asr_engine.set_thread_count(new_settings.thread_count).unwrap_or(false);
     asr_engine.set_idle_unload_minutes(new_settings.idle_unload_minutes);
+
+    if need_reload_provider || need_reload_threads {
+        let engine_clone = (*asr_engine).clone();
+        let app_clone = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = engine_clone.load_model() {
+                log::warn!("Asynchronous model reload after settings update failed: {e}");
+            }
+            let _ = app_clone.emit("model-status-changed", engine_clone.get_status());
+        });
+    }
+
+    // Resize overlay window natively if dimensions or position changed
+    if old_settings.overlay_size != new_settings.overlay_size
+        || old_settings.overlay_position != new_settings.overlay_position
+    {
+        if let Some(overlay_win) = app.get_webview_window("overlay") {
+            let _ = overlay_win.position_overlay_with_size(
+                &new_settings.overlay_position,
+                &new_settings.overlay_size,
+            );
+        }
+    }
 
     // Update autostart if changed
     if old_settings.launch_on_startup != new_settings.launch_on_startup {
         let _ = set_autostart_enabled(new_settings.launch_on_startup);
     }
 
-    // Rebind hotkey if combo or mode changed
+    // Rebind hotkey if settings changed
     if old_settings.hotkey != new_settings.hotkey
         || old_settings.hotkey_mode != new_settings.hotkey_mode
+        || old_settings.professional_mode_enabled != new_settings.professional_mode_enabled
+        || old_settings.professional_hotkey != new_settings.professional_hotkey
+        || old_settings.professional_hotkey_source != new_settings.professional_hotkey_source
     {
         hotkey_service.rebind(
             &app,
-            &old_settings.hotkey,
-            &new_settings.hotkey,
-            new_settings.hotkey_mode,
+            &old_settings,
+            &new_settings,
         )?;
     }
 
@@ -327,6 +467,7 @@ fn update_history_entry(id: String, text: String, db: State<'_, Database>, app: 
 
 #[tauri::command]
 fn delete_history(id: String, db: State<'_, Database>, app: AppHandle) -> Result<bool, String> {
+    let _ = crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id);
     let res = db.delete_history(&id).map_err(|e| e.to_string())?;
     crate::tray::update_tray_menu(&app);
     Ok(res)
@@ -334,6 +475,7 @@ fn delete_history(id: String, db: State<'_, Database>, app: AppHandle) -> Result
 
 #[tauri::command]
 fn clear_history(db: State<'_, Database>, app: AppHandle) -> Result<usize, String> {
+    let _ = crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir());
     let res = db.clear_history().map_err(|e| e.to_string())?;
     crate::tray::update_tray_menu(&app);
     Ok(res)
@@ -504,6 +646,35 @@ fn open_log_dir() -> Result<(), String> {
     open_system_url(dir_str)
 }
 
+#[tauri::command]
+fn list_recordings() -> Result<Vec<crate::storage::SavedRecordingInfo>, String> {
+    crate::storage::list_saved_recordings(&crate::storage::get_default_recordings_dir())
+}
+
+#[tauri::command]
+fn get_recording_audio(id: String) -> Result<Vec<u8>, String> {
+    crate::storage::get_recording_wav_bytes(&crate::storage::get_default_recordings_dir(), &id)
+}
+
+#[tauri::command]
+fn delete_recording(id: String) -> Result<bool, String> {
+    crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id)
+}
+
+#[tauri::command]
+fn clear_recordings() -> Result<usize, String> {
+    crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir())
+}
+
+#[tauri::command]
+fn open_recordings_dir() -> Result<(), String> {
+    let dir = crate::storage::get_default_recordings_dir();
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    }
+    open_system_url(dir.to_string_lossy().to_string())
+}
+
 // ==========================================
 // HOTKEY SERVICE
 // ==========================================
@@ -513,241 +684,34 @@ pub struct HotkeyService {
     backend: Arc<Mutex<WindowsHotkeyBackend>>,
     #[cfg(target_os = "windows")]
     mode_controller: Arc<Mutex<HotkeyModeController>>,
+    #[cfg(target_os = "windows")]
+    pro_mode_controller: Arc<Mutex<HotkeyModeController>>,
+    #[cfg(target_os = "windows")]
+    mouse_hook: Mutex<Option<WindowsMouseHook>>,
 }
 
 pub fn start_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
-    let sm = app.state::<AppStateManager>();
-    if sm.transition_to(AppState::RECORDING).is_err() {
-        return Ok(());
-    }
-    let _ = app.emit("state-changed", sm.get_snapshot());
-    crate::tray::set_tray_recording_state(app, true);
-
-    let settings = app.state::<SettingsManager>().get();
-
-    // 1. Immediately position and show overlay (<50ms target)
-    if let Some(w) = app.get_webview_window("overlay") {
-        let is_fullscreen = w.is_fullscreen_active();
-        let _ = app.emit("fullscreen-active", is_fullscreen);
-        let _ = w.position_overlay(&settings.overlay_position);
-        let _ = w.show_overlay();
-    }
-
-    // 2. Start audio capture
-    let capture_arc = app.state::<Arc<Mutex<AudioCapture>>>();
-    let mut cap = capture_arc.lock().map_err(|_| "Audio capture lock poisoned".to_string())?;
-    if let Err(e) = cap.start_recording(
-        settings.audio_device.as_deref(),
-        Some(app.clone()),
-    ) {
-        log::error!("Microphone start error: {e}");
-        sm.set_error(e.to_string());
-        let _ = app.emit("state-changed", sm.get_snapshot());
-        crate::tray::set_tray_recording_state(app, false);
-        if let Some(w) = app.get_webview_window("overlay") {
-            let _ = w.hide_overlay();
-        }
-        return Err(e.to_string());
-    }
-
-    if settings.sound_effects_enabled {
-        if let Err(e) = crate::sound::play_audio_cue(app, "start") {
-            log::warn!("Failed to play start audio cue: {e}");
-        }
-    }
-
-    Ok(())
+    app.state::<DictationController>().start(app, DictationMode::Normal)
 }
 
 pub fn stop_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
-    let sm = app.state::<AppStateManager>();
-    if sm.transition_to(AppState::TRANSCRIBING).is_err() {
-        return Ok(());
-    }
-    let _ = app.emit("state-changed", sm.get_snapshot());
-    crate::tray::set_tray_recording_state(app, false);
-
-    let capture_arc = app.state::<Arc<Mutex<AudioCapture>>>();
-    let mut cap = capture_arc.lock().map_err(|_| "Audio capture lock poisoned".to_string())?;
-    match cap.stop_recording() {
-        Ok(captured) => {
-            let settings = app.state::<SettingsManager>().get();
-            if settings.sound_effects_enabled {
-                if let Err(e) = crate::sound::play_audio_cue(app, "stop") {
-                    log::warn!("Failed to play stop audio cue: {e}");
-                }
-            }
-
-            let app_clone = app.clone();
-            std::thread::Builder::new()
-                .name("murmur-transcriber".to_string())
-                .spawn(move || {
-                    let sm = app_clone.state::<AppStateManager>();
-                    let engine = app_clone.state::<AsrEngine>();
-                    let settings = app_clone.state::<SettingsManager>().get();
-                    let db = app_clone.state::<Database>();
-
-                    // Check cancellation
-                    if sm.get_state() != AppState::TRANSCRIBING {
-                        return;
-                    }
-
-                    // 1. Resample to 16kHz mono PCM with delay compensation
-                    let pcm = match resample_and_normalize(
-                        &captured.samples,
-                        captured.sample_rate,
-                        captured.channels,
-                    ) {
-                        Ok(p) => p,
-                        Err(e) => {
-                            log::error!("Resampling error: {e}");
-                            sm.set_error(e.to_string());
-                            let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                            if let Some(w) = app_clone.get_webview_window("overlay") {
-                                let _ = w.hide_overlay();
-                            }
-                            return;
-                        }
-                    };
-
-                    if sm.get_state() != AppState::TRANSCRIBING {
-                        return;
-                    }
-
-                    let post_cfg = PostProcessConfig::from(&settings);
-                    let dict = db.get_dictionary().unwrap_or_default();
-                    let structure_cfg = crate::asr::StructureConfig::from(&settings);
-
-                    // 2. Transcribe samples (VAD trimming, Parakeet inference, chunking, postprocessing, smart structure)
-                    match engine.transcribe_samples(&pcm, &post_cfg, &dict, Some(&structure_cfg)) {
-                        Ok(result) => {
-                            if sm.get_state() != AppState::TRANSCRIBING {
-                                return;
-                            }
-
-                            // Discard silently if speech < 300ms or silent
-                            if result.discarded_silent || result.final_text.is_empty() {
-                                log::info!("VAD discarded audio (silent or <300ms speech). Resetting to IDLE.");
-                                sm.reset_to_idle();
-                                let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                                if let Some(w) = app_clone.get_webview_window("overlay") {
-                                    let _ = w.hide_overlay();
-                                }
-                                return;
-                            }
-
-                            // 3. Emit transcript ready event
-                            let _ = app_clone.emit("transcript-ready", &result.final_text);
-
-                            // 4. Perform text injection if auto-insert enabled
-                            if settings.auto_insert {
-                                if sm.transition_to(AppState::INSERTING).is_ok() {
-                                    let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                                }
-
-                                let inject_mode = match settings.insertion_mode {
-                                    InsertionMode::UnicodeTyping => Some("unicode".to_string()),
-                                    InsertionMode::PasteWithRestore => None,
-                                };
-
-                                if let Err(e) = inject_text(result.final_text.clone(), inject_mode) {
-                                    log::warn!("Text injection failed ({e}). Falling back to clipboard copy.");
-                                    if let Ok(mut cb) = arboard::Clipboard::new() {
-                                        let _ = cb.set_text(&result.final_text);
-                                    }
-                                    let _ = app_clone.emit("injection-fallback", serde_json::json!({
-                                        "text": &result.final_text,
-                                        "error": e,
-                                    }));
-                                }
-                            } else {
-                                // Copy to clipboard even if auto_insert is false
-                                if let Ok(mut cb) = arboard::Clipboard::new() {
-                                    let _ = cb.set_text(&result.final_text);
-                                }
-                            }
-
-                            // 5. Save entry to SQLite history database
-                            if settings.persistent_history {
-                                let _ = db.insert_history(
-                                    NewHistoryRecord {
-                                        raw_text: result.raw_text.clone(),
-                                        final_text: result.final_text.clone(),
-                                        duration_ms: result.duration_ms,
-                                        language: Some("en".to_string()),
-                                        model_variant: Some(settings.model_variant),
-                                        provider: Some(result.provider.clone()),
-                                        inference_ms: Some(result.inference_ms),
-                                    },
-                                    settings.history_retention_max,
-                                );
-                                crate::tray::update_tray_menu(&app_clone);
-                            }
-
-                            // 6. Transition to AppState::DONE and show checkmark on overlay for ~600ms
-                            if sm.transition_to(AppState::DONE).is_ok() {
-                                let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                            }
-
-                            std::thread::sleep(std::time::Duration::from_millis(600));
-
-                            // 7. Hide overlay window completely
-                            if let Some(w) = app_clone.get_webview_window("overlay") {
-                                let _ = w.hide_overlay();
-                            }
-
-                            // 8. Return to AppState::IDLE
-                            sm.reset_to_idle();
-                            let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                        }
-                        Err(e) => {
-                            log::error!("Transcription error: {e}");
-                            sm.set_error(e.to_string());
-                            let _ = app_clone.emit("state-changed", sm.get_snapshot());
-                            if let Some(w) = app_clone.get_webview_window("overlay") {
-                                let _ = w.hide_overlay();
-                            }
-                        }
-                    }
-                })
-                .expect("Failed to spawn transcriber thread");
-        }
-        Err(e) => {
-            log::error!("Microphone stop error: {e}");
-            sm.set_error(e.to_string());
-            let _ = app.emit("state-changed", sm.get_snapshot());
-            return Err(e.to_string());
-        }
-    }
-    Ok(())
+    app.state::<DictationController>().stop(app)
 }
 
 pub fn cancel_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
-    let sm = app.state::<AppStateManager>();
-    sm.reset_to_idle();
-    let _ = app.emit("state-changed", sm.get_snapshot());
-    crate::tray::set_tray_recording_state(app, false);
-
-    crate::sound::stop_audio_cues();
-
-    let capture_arc = app.state::<Arc<Mutex<AudioCapture>>>();
-    if let Ok(mut cap) = capture_arc.lock() {
-        cap.cancel_recording();
-    }
-
-    if let Some(w) = app.get_webview_window("overlay") {
-        let _ = w.hide_overlay();
-    }
-    Ok(())
+    app.state::<DictationController>().cancel(app)
 }
 
 pub fn toggle_dictation_pipeline(app: &AppHandle) -> Result<(), String> {
-    let sm = app.state::<AppStateManager>();
-    match sm.get_state() {
-        AppState::RECORDING => stop_dictation_pipeline(app),
-        AppState::IDLE | AppState::ERROR => start_dictation_pipeline(app),
-        _ => Ok(()),
-    }
+    app.state::<DictationController>().toggle(app)
+}
+
+pub fn start_professional_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().start(app, DictationMode::Professional)
+}
+
+pub fn stop_professional_pipeline(app: &AppHandle) -> Result<(), String> {
+    app.state::<DictationController>().stop(app)
 }
 
 #[cfg(target_os = "windows")]
@@ -780,29 +744,82 @@ fn create_hotkey_action_callback(
     })
 }
 
+#[cfg(target_os = "windows")]
+fn create_pro_hotkey_action_callback(
+    app: AppHandle,
+    mode_controller: Arc<Mutex<HotkeyModeController>>,
+) -> HotkeyActionCallback {
+    Arc::new(move |action| {
+        let sm = app.state::<AppStateManager>();
+        let current = sm.get_state();
+        let next_opt = {
+            let mc = mode_controller.lock().unwrap();
+            mc.handle_action(action, current)
+        };
+
+        if let Some(next) = next_opt {
+            match next {
+                AppState::RECORDING => {
+                    let _ = start_professional_pipeline(&app);
+                }
+                AppState::TRANSCRIBING => {
+                    let _ = stop_professional_pipeline(&app);
+                }
+                AppState::IDLE => {
+                    let _ = cancel_dictation_pipeline(&app);
+                }
+                _ => {}
+            }
+        }
+    })
+}
+
 impl HotkeyService {
-    pub fn new(app_handle: &AppHandle, initial_hotkey: &str, initial_mode: HotkeyMode) -> Self {
+    pub fn new(app_handle: &AppHandle, settings: &AppSettings) -> Self {
         #[cfg(target_os = "windows")]
         {
             let mut backend = WindowsHotkeyBackend::new();
-            let mode_controller = Arc::new(Mutex::new(HotkeyModeController::new(initial_mode)));
+            let mode_controller = Arc::new(Mutex::new(HotkeyModeController::new(settings.hotkey_mode)));
             let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&mode_controller));
 
-            if let Err(e) = backend.register_hotkey_action(initial_hotkey, action_cb) {
-                log::error!("Failed to register initial hotkey '{initial_hotkey}': {e}");
+            if let Err(e) = backend.register_hotkey_action(&settings.hotkey, action_cb) {
+                log::error!("Failed to register initial hotkey '{}': {}", settings.hotkey, e);
             }
             if let Err(e) = backend.start_listening() {
                 log::error!("Failed to start hotkey listener thread: {e}");
             }
 
+            let pro_mode_controller = Arc::new(Mutex::new(HotkeyModeController::new(settings.hotkey_mode)));
+            let mut mouse_hook = None;
+
+            if settings.professional_mode_enabled {
+                let pro_action_cb = create_pro_hotkey_action_callback(app_handle.clone(), Arc::clone(&pro_mode_controller));
+                if settings.professional_hotkey_source == "keyboard" {
+                    set_ctrl_win_callback(Some(pro_action_cb));
+                    set_ctrl_win_enabled(true);
+                } else if settings.professional_hotkey_source == "mouse4" || settings.professional_hotkey_source == "mouse5" {
+                    let btn = if settings.professional_hotkey_source == "mouse4" { MouseButton::XButton1 } else { MouseButton::XButton2 };
+                    let pro_action_cb_clone = pro_action_cb.clone();
+                    let cb: crate::platform::windows::MouseActionCallback = Arc::new(move |_btn, act| {
+                        let ha = if act == MouseAction::Press { HotkeyAction::Press } else { HotkeyAction::Release };
+                        pro_action_cb_clone(ha);
+                    });
+                    if let Ok(hook) = WindowsMouseHook::start(btn, cb) {
+                        mouse_hook = Some(hook);
+                    }
+                }
+            }
+
             Self {
                 backend: Arc::new(Mutex::new(backend)),
                 mode_controller,
+                pro_mode_controller,
+                mouse_hook: Mutex::new(mouse_hook),
             }
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (app_handle, initial_hotkey, initial_mode);
+            let _ = (app_handle, settings);
             Self {}
         }
     }
@@ -810,9 +827,8 @@ impl HotkeyService {
     pub fn rebind(
         &self,
         app_handle: &AppHandle,
-        old_hotkey: &str,
-        new_hotkey: &str,
-        new_mode: HotkeyMode,
+        old_settings: &AppSettings,
+        new_settings: &AppSettings,
     ) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         {
@@ -820,18 +836,52 @@ impl HotkeyService {
             self.mode_controller
                 .lock()
                 .map_err(|_| "Controller lock poisoned")?
-                .set_mode(new_mode);
+                .set_mode(new_settings.hotkey_mode);
 
-            let _ = backend.unregister_hotkey(old_hotkey);
+            self.pro_mode_controller
+                .lock()
+                .map_err(|_| "Pro controller lock poisoned")?
+                .set_mode(new_settings.hotkey_mode);
+
+            let _ = backend.unregister_hotkey(&old_settings.hotkey);
             let action_cb = create_hotkey_action_callback(app_handle.clone(), Arc::clone(&self.mode_controller));
 
             backend
-                .register_hotkey_action(new_hotkey, action_cb)
+                .register_hotkey_action(&new_settings.hotkey, action_cb)
                 .map_err(|e| e.to_string())?;
+                
+            // Rebind professional hotkey
+            set_ctrl_win_enabled(false);
+            set_ctrl_win_callback(None);
+            if let Ok(mut mh) = self.mouse_hook.lock() {
+                if let Some(mut h) = mh.take() {
+                    h.stop();
+                }
+            }
+            
+            if new_settings.professional_mode_enabled {
+                let pro_action_cb = create_pro_hotkey_action_callback(app_handle.clone(), Arc::clone(&self.pro_mode_controller));
+                if new_settings.professional_hotkey_source == "keyboard" {
+                    set_ctrl_win_callback(Some(pro_action_cb));
+                    set_ctrl_win_enabled(true);
+                } else if new_settings.professional_hotkey_source == "mouse4" || new_settings.professional_hotkey_source == "mouse5" {
+                    let btn = if new_settings.professional_hotkey_source == "mouse4" { MouseButton::XButton1 } else { MouseButton::XButton2 };
+                    let pro_action_cb_clone = pro_action_cb.clone();
+                    let cb: crate::platform::windows::MouseActionCallback = Arc::new(move |_btn, act| {
+                        let ha = if act == MouseAction::Press { HotkeyAction::Press } else { HotkeyAction::Release };
+                        pro_action_cb_clone(ha);
+                    });
+                    if let Ok(hook) = WindowsMouseHook::start(btn, cb) {
+                        if let Ok(mut mh) = self.mouse_hook.lock() {
+                            *mh = Some(hook);
+                        }
+                    }
+                }
+            }
         }
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (app_handle, old_hotkey, new_hotkey, new_mode);
+            let _ = (app_handle, old_settings, new_settings);
         }
         Ok(())
     }
@@ -866,26 +916,32 @@ pub fn run() {
 
     // 5. Initialize ASR engine and spawn background loading
     let initial_settings = settings_manager.get();
-    let asr_engine = AsrEngine::new(
+    let asr_engine = AsrEngine::new_with_threads(
         &initial_settings.performance_provider,
         initial_settings.idle_unload_minutes,
+        initial_settings.thread_count,
     );
     asr_engine.spawn_background_load();
 
     tauri::Builder::default()
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
-                    let _ = window.hide();
-                    api.prevent_close();
+            match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
+                    if window.label() == "main" {
+                        let _ = window.hide();
+                        api.prevent_close();
+                    }
                 }
+                _ => {}
             }
         })
         .manage(AppStateManager::new())
         .manage(database)
         .manage(settings_manager.clone())
         .manage(audio_capture)
+        .manage(Arc::new(Mutex::new(crate::audio::AudioMonitorProbe::new())))
         .manage(asr_engine)
+        .manage(DictationController::new())
         .invoke_handler(tauri::generate_handler![
             get_state,
             get_state_snapshot,
@@ -897,6 +953,10 @@ pub fn run() {
             show_overlay,
             hide_overlay,
             is_fullscreen_active,
+            minimize_main_window,
+            toggle_maximize_main_window,
+            close_main_window,
+            start_drag_main_window,
             inject_text,
             is_autostart_enabled,
             set_autostart_enabled,
@@ -904,6 +964,8 @@ pub fn run() {
             start_audio_capture,
             stop_audio_capture,
             cancel_audio_capture,
+            start_mic_test,
+            stop_mic_test,
             start_recording,
             stop_recording,
             cancel_recording,
@@ -916,6 +978,11 @@ pub fn run() {
             import_dictionary,
             open_system_url,
             open_log_dir,
+            open_recordings_dir,
+            list_recordings,
+            get_recording_audio,
+            delete_recording,
+            clear_recordings,
             get_settings,
             update_settings,
             get_history,
@@ -929,9 +996,17 @@ pub fn run() {
             copy_diagnostics,
             get_model_status,
             load_model,
+            validate_model_path,
+            import_local_model,
+            get_managed_model_path,
             transcribe_audio_buffer,
             benchmark_model,
             apply_structure_preview,
+            start_professional_recording,
+            stop_professional_recording,
+            cancel_professional_recording,
+            get_lm_studio_models,
+            test_lm_studio_connection,
         ])
         .setup(move |app| {
             // Initialize System Tray
@@ -945,15 +1020,17 @@ pub fn run() {
                     log::warn!("Could not apply overlay styles on startup: {e}");
                 }
                 let current_settings = settings_manager.get();
-                let _ = overlay_window.position_overlay(&current_settings.overlay_position);
+                let _ = overlay_window.position_overlay_with_size(
+                    &current_settings.overlay_position,
+                    &current_settings.overlay_size,
+                );
             }
 
             // Initialize HotkeyService wired to AppState and AudioCapture
             let current_settings = settings_manager.get();
             let hotkey_service = HotkeyService::new(
                 &app.handle().clone(),
-                &current_settings.hotkey,
-                current_settings.hotkey_mode,
+                &current_settings,
             );
             app.manage(hotkey_service);
 
@@ -962,6 +1039,16 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running murmur tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building murmur tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                #[cfg(target_os = "windows")]
+                {
+                    crate::platform::windows::reset_ctrl_win_state();
+                    crate::platform::windows::reset_mouse_hook_state();
+                }
+                let _ = cancel_dictation_pipeline(app_handle);
+            }
+        });
 }

@@ -8,11 +8,20 @@ use windows::Win32::UI::Shell::{
     SHQueryUserNotificationState, QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetForegroundWindow, GetWindowLongW, GetWindowRect, SetWindowLongW, SetWindowPos,
+    GetCursorPos, GetForegroundWindow, GetWindowLongW, SetWindowLongW, SetWindowPos,
     ShowWindow, GWL_EXSTYLE, HWND_TOPMOST, SWP_FRAMECHANGED, SWP_HIDEWINDOW, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SW_HIDE, SW_SHOWNOACTIVATE,
     WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT,
 };
+
+/// Physical dimensions in logical pixels for overlay size presets (+15-20% spacious).
+pub fn get_overlay_dimensions(size_preset: &str) -> (i32, i32) {
+    match size_preset.to_uppercase().as_str() {
+        "S" => (240, 56),
+        "L" => (330, 76),
+        _ => (280, 66),
+    }
+}
 
 /// Calculate physical screen coordinates for positioning the overlay window within a monitor work area.
 pub fn calculate_overlay_position(
@@ -174,11 +183,16 @@ impl OverlayWindowExt for tauri::WebviewWindow {
     }
 
     fn position_overlay(&self, anchor: &str) -> Result<(), PlatformError> {
+        self.position_overlay_with_size(anchor, "M")
+    }
+
+    fn position_overlay_with_size(&self, anchor: &str, size_preset: &str) -> Result<(), PlatformError> {
         let raw_hwnd = self
             .hwnd()
             .map_err(|e| PlatformError::WindowError(format!("Failed to retrieve HWND: {e}")))?;
 
         let hwnd = HWND(raw_hwnd.0);
+        let (win_w, win_h) = get_overlay_dimensions(size_preset);
 
         unsafe {
             let monitor = get_target_monitor(hwnd);
@@ -191,15 +205,6 @@ impl OverlayWindowExt for tauri::WebviewWindow {
                 return Err(PlatformError::WindowError("GetMonitorInfoW failed".into()));
             }
 
-            let mut win_rect = RECT::default();
-            let (win_w, win_h) = if GetWindowRect(hwnd, &mut win_rect).is_ok()
-                && (win_rect.right - win_rect.left) > 0
-            {
-                (win_rect.right - win_rect.left, win_rect.bottom - win_rect.top)
-            } else {
-                (240, 54)
-            };
-
             let (x, y) = calculate_overlay_position(&mi.rcWork, win_w, win_h, anchor);
 
             SetWindowPos(
@@ -207,13 +212,14 @@ impl OverlayWindowExt for tauri::WebviewWindow {
                 Some(HWND_TOPMOST),
                 x,
                 y,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOACTIVATE,
+                win_w,
+                win_h,
+                SWP_NOACTIVATE,
             )
             .map_err(|e| PlatformError::WindowError(format!("SetWindowPos position failed: {e}")))?;
         }
 
+        let _ = self.set_size(tauri::LogicalSize::new(win_w as f64, win_h as f64));
         Ok(())
     }
 
@@ -249,7 +255,6 @@ impl OverlayWindowExt for tauri::WebviewWindow {
             .map_err(|e| PlatformError::WindowError(format!("SetWindowPos show failed: {e}")))?;
         }
 
-        let _ = self.show();
         Ok(())
     }
 
@@ -273,7 +278,6 @@ impl OverlayWindowExt for tauri::WebviewWindow {
             );
         }
 
-        let _ = self.hide();
         Ok(())
     }
 }

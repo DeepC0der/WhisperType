@@ -35,6 +35,10 @@ pub struct HistoryRecord {
     pub model_variant: String,
     pub provider: String,
     pub inference_ms: u32,
+    /// Professional Mode: the LLM-refined text (None for normal dictation entries).
+    pub refined_text: Option<String>,
+    /// Recording mode: "normal" | "professional" (None for legacy entries).
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,6 +50,10 @@ pub struct NewHistoryRecord {
     pub model_variant: Option<String>,
     pub provider: Option<String>,
     pub inference_ms: Option<u32>,
+    /// Professional Mode only: LLM-refined output text.
+    pub refined_text: Option<String>,
+    /// Recording mode: "normal" | "professional".
+    pub mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,7 +117,9 @@ impl Database {
                 language TEXT NOT NULL,
                 model_variant TEXT NOT NULL,
                 provider TEXT NOT NULL,
-                inference_ms INTEGER NOT NULL
+                inference_ms INTEGER NOT NULL,
+                refined_text TEXT,
+                mode TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_history_created_at ON history (created_at DESC);
@@ -124,6 +134,21 @@ impl Database {
 
             CREATE INDEX IF NOT EXISTS idx_dictionary_find ON dictionary (find_text);",
         )?;
+
+        // Migrate existing history table: add refined_text and mode columns if they don't exist
+        // (SQLite ADD COLUMN is safe and idempotent for schema evolution)
+        for migration in &[
+            "ALTER TABLE history ADD COLUMN refined_text TEXT",
+            "ALTER TABLE history ADD COLUMN mode TEXT",
+        ] {
+            if let Err(e) = conn.execute_batch(migration) {
+                // "duplicate column name" means migration already applied — ignore
+                let err_str = e.to_string().to_lowercase();
+                if !err_str.contains("duplicate column name") {
+                    return Err(DbError::Sqlite(e));
+                }
+            }
+        }
 
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -152,8 +177,8 @@ impl Database {
         let inference_ms = record.inference_ms.unwrap_or(0);
 
         conn.execute(
-            "INSERT INTO history (id, raw_text, final_text, created_at, duration_ms, language, model_variant, provider, inference_ms)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO history (id, raw_text, final_text, created_at, duration_ms, language, model_variant, provider, inference_ms, refined_text, mode)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 &id,
                 &record.raw_text,
@@ -164,6 +189,8 @@ impl Database {
                 &model_variant,
                 &provider,
                 inference_ms,
+                &record.refined_text,
+                &record.mode,
             ],
         )?;
 
@@ -187,6 +214,8 @@ impl Database {
             model_variant,
             provider,
             inference_ms,
+            refined_text: record.refined_text,
+            mode: record.mode,
         })
     }
 
@@ -202,7 +231,7 @@ impl Database {
         let offset = offset.unwrap_or(0) as i64;
 
         let mut stmt = conn.prepare(
-            "SELECT id, raw_text, final_text, created_at, duration_ms, language, model_variant, provider, inference_ms
+            "SELECT id, raw_text, final_text, created_at, duration_ms, language, model_variant, provider, inference_ms, refined_text, mode
              FROM history ORDER BY created_at DESC, id DESC LIMIT ?1 OFFSET ?2",
         )?;
 
@@ -217,6 +246,8 @@ impl Database {
                 model_variant: row.get(6)?,
                 provider: row.get(7)?,
                 inference_ms: row.get(8)?,
+                refined_text: row.get(9)?,
+                mode: row.get(10)?,
             })
         })?;
 
@@ -347,6 +378,7 @@ impl Database {
     }
 }
 
+#[allow(dead_code)]
 fn match_ignore_case_at(s: &str, prefix: &str) -> Option<usize> {
     let mut s_chars = s.chars();
     let mut p_chars = prefix.chars();
@@ -391,31 +423,41 @@ fn match_ignore_case_at(s: &str, prefix: &str) -> Option<usize> {
 }
 
 /// Apply a sequence of dictionary replacement rules to transcribed text.
+/// Enforces whole-word boundary matching (\b) so that substring matches (e.g., AMIN inside "contamination" or "vitamin")
+/// are never inadvertently replaced.
 pub fn apply_dictionary(text: &str, entries: &[DictionaryRecord]) -> String {
     let mut result = text.to_string();
 
     for entry in entries {
-        if entry.find_text.is_empty() {
+        let trimmed_find = entry.find_text.trim();
+        if trimmed_find.is_empty() {
             continue;
         }
 
-        if entry.is_case_sensitive {
-            result = result.replace(&entry.find_text, &entry.replace_text);
-        } else {
-            let mut out = String::with_capacity(result.len());
-            let mut byte_idx = 0;
+        // Determine word boundaries based on first and last characters of find_text
+        let starts_word = trimmed_find
+            .chars()
+            .next()
+            .map_or(false, |c| c.is_alphanumeric() || c == '_');
+        let ends_word = trimmed_find
+            .chars()
+            .last()
+            .map_or(false, |c| c.is_alphanumeric() || c == '_');
 
-            while byte_idx < result.len() {
-                if let Some(matched_bytes) = match_ignore_case_at(&result[byte_idx..], &entry.find_text) {
-                    out.push_str(&entry.replace_text);
-                    byte_idx += matched_bytes;
-                } else {
-                    let next_char = result[byte_idx..].chars().next().unwrap();
-                    out.push(next_char);
-                    byte_idx += next_char.len_utf8();
-                }
-            }
-            result = out;
+        let prefix = if starts_word { r"\b" } else { "" };
+        let suffix = if ends_word { r"\b" } else { "" };
+        let escaped = regex::escape(trimmed_find);
+
+        let pattern = if entry.is_case_sensitive {
+            format!(r"{prefix}{escaped}{suffix}")
+        } else {
+            format!(r"(?i){prefix}{escaped}{suffix}")
+        };
+
+        if let Ok(re) = regex::Regex::new(&pattern) {
+            result = re
+                .replace_all(&result, regex::NoExpand(&entry.replace_text))
+                .into_owned();
         }
     }
 
@@ -452,6 +494,8 @@ mod tests {
                     model_variant: None,
                     provider: None,
                     inference_ms: Some(100),
+                    refined_text: None,
+                    mode: Some("normal".into()),
                 },
                 3, // max retention = 3
             )
@@ -556,6 +600,21 @@ mod tests {
         ];
         let res_unicode = apply_dictionary("Enjoying CAFÉ in İSTANBUL test.", &unicode_entries);
         assert_eq!(res_unicode, "Enjoying espresso in İSTANBUL passed.");
+
+        // Word boundary protection test: PORT -> TERMINAL must not alter important or transport
+        let port_rule = vec![DictionaryRecord {
+            id: "5".into(),
+            find_text: "PORT".into(),
+            replace_text: "TERMINAL".into(),
+            is_case_sensitive: false,
+            created_at: "".into(),
+        }];
+        let test_sentence = "AMIN detected high contamination and took vitamin D with AMIN.";
+        let res_port = apply_dictionary(test_sentence, &port_rule);
+        assert_eq!(
+            res_port,
+            "TERMINAL detected important matters and took transport with TERMINAL."
+        );
     }
 
     #[test]
@@ -570,6 +629,8 @@ mod tests {
                 model_variant: None,
                 provider: None,
                 inference_ms: None,
+                refined_text: None,
+                mode: Some("normal".into()),
             },
             100,
         )

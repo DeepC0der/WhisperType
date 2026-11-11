@@ -68,6 +68,12 @@ pub trait OverlayWindowExt {
     /// Position overlay on the active or cursor monitor according to user-selected anchor.
     fn position_overlay(&self, anchor: &str) -> Result<(), PlatformError>;
 
+    /// Position and resize overlay according to user-selected anchor and size preset ("S", "M", "L").
+    fn position_overlay_with_size(&self, anchor: &str, size_preset: &str) -> Result<(), PlatformError> {
+        let _ = size_preset;
+        self.position_overlay(anchor)
+    }
+
     /// Check if a fullscreen application or presentation is currently active.
     fn is_fullscreen_active(&self) -> bool;
 

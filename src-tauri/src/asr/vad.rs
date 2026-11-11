@@ -95,7 +95,7 @@ impl VadProcessor {
         vad_config.sample_rate = self.config.sample_rate as i32;
         vad_config.num_threads = 1;
 
-        let detector = sherpa_onnx::VoiceActivityDetector::create(&vad_config, 60.0)?;
+        let detector = sherpa_onnx::VoiceActivityDetector::create(&vad_config, 600.0)?;
         detector.accept_waveform(samples);
         detector.flush();
 

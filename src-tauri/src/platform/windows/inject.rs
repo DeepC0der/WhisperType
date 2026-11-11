@@ -78,12 +78,107 @@ enum SavedClipboard {
     Empty,
 }
 
+/// Check if foreground target window belongs to an elevated (administrator) process,
+/// which triggers Windows User Interface Privilege Isolation (UIPI) blocking standard SendInput.
+pub fn is_foreground_window_elevated() -> bool {
+    unsafe {
+        let hwnd = windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return false;
+        }
+
+        let mut pid = 0u32;
+        windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return false;
+        }
+
+        let proc_res = windows::Win32::System::Threading::OpenProcess(
+            windows::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION,
+            false,
+            pid,
+        );
+        let Ok(proc) = proc_res else {
+            // Access denied opening process info almost always indicates higher integrity/elevated process
+            return true;
+        };
+
+        use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
+        let mut token = windows::Win32::Foundation::HANDLE::default();
+        let elevated = if windows::Win32::System::Threading::OpenProcessToken(proc, TOKEN_QUERY, &mut token).is_ok() {
+            let mut elevation = TOKEN_ELEVATION::default();
+            let mut ret_len = 0u32;
+            let ok = GetTokenInformation(
+                token,
+                TokenElevation,
+                Some(&mut elevation as *mut _ as *mut _),
+                std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+                &mut ret_len,
+            );
+            let _ = windows::Win32::Foundation::CloseHandle(token);
+            ok.is_ok() && elevation.TokenIsElevated != 0
+        } else {
+            false
+        };
+
+        let _ = windows::Win32::Foundation::CloseHandle(proc);
+        elevated
+    }
+}
+
 /// Windows implementation of TextInjector utilizing Win32 SendInput and arboard.
 pub struct WindowsTextInjector;
 
 impl WindowsTextInjector {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Primary paste injection with automatic fallback to Unicode typing, plus UIPI elevation diagnostics.
+    pub fn inject_text_with_diagnostics(
+        &self,
+        text: &str,
+        preferred_mode: Option<&str>,
+    ) -> Result<(), PlatformError> {
+        let is_unicode = preferred_mode == Some("unicode");
+
+        let first_res = if is_unicode {
+            self.inject_unicode(text)
+        } else {
+            self.inject_paste(text)
+        };
+
+        if first_res.is_ok() {
+            return Ok(());
+        }
+
+        log::warn!(
+            "First injection strategy ({}) failed: {:?}. Attempting fallback...",
+            if is_unicode { "Unicode" } else { "Paste" },
+            first_res
+        );
+
+        // Fallback to alternate strategy
+        let fallback_res = if is_unicode {
+            self.inject_paste(text)
+        } else {
+            self.inject_unicode(text)
+        };
+
+        if fallback_res.is_ok() {
+            return Ok(());
+        }
+
+        // Both strategies failed: diagnose if UIPI elevation is blocking SendInput
+        if is_foreground_window_elevated() {
+            Err(PlatformError::OsError(
+                "Windows UIPI blocked text injection: the active foreground window is running with Administrator privileges. Standard applications cannot send input to elevated windows. Run Murmur as Administrator to dictate into elevated apps.".to_string(),
+            ))
+        } else {
+            Err(PlatformError::OsError(
+                "Text injection failed: SendInput could not deliver keystrokes to the active target application.".to_string(),
+            ))
+        }
     }
 }
 
