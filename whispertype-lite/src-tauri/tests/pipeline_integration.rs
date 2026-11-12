@@ -273,7 +273,6 @@ fn test_settings_wiring_and_privacy_defaults() {
     assert_eq!(settings.max_recording_seconds, 60);
     assert_eq!(settings.audio_gain_percent, 100);
     assert_eq!(settings.fullscreen_behavior, "show");
-    assert!(!settings.store_audio);
 }
 
 #[test]

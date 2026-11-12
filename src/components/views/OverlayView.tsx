@@ -291,13 +291,7 @@ export const OverlayView: React.FC = () => {
                   />
                 </svg>
               </div>
-            ) : (
-              <span
-                className={`h-2.5 w-2.5 rounded-full shrink-0 ${
-                  isPro ? "bg-status-refining glow-refining" : "bg-status-recording glow-recording"
-                }`}
-              />
-            )
+            ) : null
           ) : appState === "REFINING" ? (
             <Sparkles
               className={`h-4 w-4 glow-refining ${
@@ -337,29 +331,25 @@ export const OverlayView: React.FC = () => {
             <span className="h-2.5 w-2.5 rounded-full bg-primary" />
           )}
 
-          {/* PRO Badge when Professional Mode is active (shown even in ultra-minimal mode so mode is unmistakable) */}
+          {/* AI Badge when Professional Mode is active (shown even in ultra-minimal mode so mode is unmistakable) */}
           {isPro && (
             <span
               className={`font-pixel text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-status-refining/25 text-status-refining border border-status-refining/60 select-none ${
                 isDimmed && appState === "RECORDING" ? "opacity-50" : "opacity-100"
               }`}
             >
-              PRO
+              AI
             </span>
           )}
 
           {/* Retro Pixel Font Silkscreen Status Text */}
-          {!settings.ultra_minimal_mode && (
+          {!settings.ultra_minimal_mode && appState !== "RECORDING" && (
             <span
               className={`font-pixel text-[12px] sm:text-[13px] font-bold tracking-widest uppercase select-none transition-opacity duration-500 phosphor-glow-subtle ${
-                isDimmed && appState === "RECORDING" ? "opacity-40" : "opacity-100"
-              } ${
                 appState === "ERROR"
                   ? "text-status-error glow-error"
                   : isPro
                   ? "text-status-refining glow-refining"
-                  : appState === "RECORDING"
-                  ? "text-status-recording glow-recording"
                   : appState === "TRANSCRIBING"
                   ? "text-status-transcribing glow-transcribing"
                   : appState === "INSERTING" || appState === "DONE"
@@ -367,9 +357,7 @@ export const OverlayView: React.FC = () => {
                   : "text-foreground"
               }`}
             >
-              {appState === "RECORDING"
-                ? "REC"
-                : appState === "TRANSCRIBING"
+              {appState === "TRANSCRIBING"
                 ? "TRANSCRIBING..."
                 : appState === "REFINING"
                 ? "AI NOTES..."

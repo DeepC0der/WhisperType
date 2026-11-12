@@ -274,9 +274,7 @@ export const OverlayView: React.FC = () => {
                   />
                 </svg>
               </div>
-            ) : (
-              <span className="h-2.5 w-2.5 rounded-full shrink-0 bg-status-recording glow-recording" />
-            )
+            ) : null
           ) : appState === "TRANSCRIBING" ? (
             <Sparkles
               className={`h-4 w-4 glow-transcribing ${

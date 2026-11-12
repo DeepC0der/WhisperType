@@ -33,7 +33,6 @@ tracing-appender = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1.10"
-hound = "3.5"
 sherpa-onnx = { version = "1.13.8", default-features = false, features = ["shared"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

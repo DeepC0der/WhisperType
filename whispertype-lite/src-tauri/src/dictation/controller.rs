@@ -404,7 +404,6 @@ fn run_worker_pipeline(
     }
 
     // 5. Database History Persistence
-    let mut history_id = None;
     if settings.persistent_history {
         let new_rec = NewHistoryRecord {
             raw_text: asr_result.raw_text.clone(),
@@ -418,26 +417,13 @@ fn run_worker_pipeline(
             mode: record_mode,
         };
 
-        if let Ok(saved) = db.insert_history(new_rec, settings.history_retention_max) {
-            history_id = Some(saved.id);
+        if db.insert_history(new_rec, settings.history_retention_max).is_ok() {
             crate::tray::update_tray_menu(&app);
         }
     }
 
     // Emit transcript event once after DB persistence so frontend history & scratchpad update cleanly
     let _ = app.emit("transcript-ready", &final_text_to_inject);
-
-    // 6. Optional Audio Archival
-    if settings.store_audio {
-        let rec_id = history_id.unwrap_or_else(|| format!("audio_{}", uuid::Uuid::new_v4()));
-        let rec_dir = crate::storage::get_default_recordings_dir();
-        let _ = crate::storage::save_recording_file(&rec_dir, &rec_id, &pcm);
-
-        if let Ok(recent) = db.get_history(Some(settings.history_retention_max), None) {
-            let active_ids: Vec<String> = recent.into_iter().map(|r| r.id).collect();
-            let _ = crate::storage::prune_unreferenced_recordings(&rec_dir, &active_ids);
-        }
-    }
 
     if is_cancelled() {
         return;

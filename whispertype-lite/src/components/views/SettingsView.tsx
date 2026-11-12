@@ -19,7 +19,6 @@ import {
   Play,
   Sparkles,
   AlertTriangle,
-  Trash2,
 } from "lucide-react";
 
 export const SettingsView: React.FC = () => {
@@ -27,13 +26,10 @@ export const SettingsView: React.FC = () => {
     settings,
     audioDevices,
     modelStatus,
-    recordings,
     fetchSettings,
     saveSettings,
     fetchAudioDevices,
     fetchModelStatus,
-    fetchRecordings,
-    clearAllRecordings,
     validateModelPath,
     importLocalModel,
     setShowOnboarding,
@@ -56,8 +52,7 @@ export const SettingsView: React.FC = () => {
     fetchSettings();
     fetchAudioDevices();
     fetchModelStatus();
-    fetchRecordings();
-  }, [fetchSettings, fetchAudioDevices, fetchModelStatus, fetchRecordings]);
+  }, [fetchSettings, fetchAudioDevices, fetchModelStatus]);
 
   // Polling fallback while model is loading
   useEffect(() => {
@@ -156,27 +151,6 @@ export const SettingsView: React.FC = () => {
         console.warn("open_log_dir error:", err);
       }
     }
-  };
-
-  // Open Recordings Directory
-  const handleOpenRecordingsDir = async () => {
-    if (typeof window !== "undefined" && ("__TAURI_INTERNALS__" in window || "__TAURI__" in window)) {
-      try {
-        const { invoke } = await import("@tauri-apps/api/core");
-        await invoke("open_recordings_dir");
-      } catch (err) {
-        console.warn("open_recordings_dir error:", err);
-      }
-    }
-  };
-
-  const [showClearRecordingsConfirm, setShowClearRecordingsConfirm] = useState(false);
-
-  const totalRecordingsBytes = recordings.reduce((acc, r) => acc + (r.size_bytes || 0), 0);
-  const formatStorageSize = (bytes: number) => {
-    if (bytes < 1024) return `${bytes} B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
   // Trigger Benchmark
@@ -1074,88 +1048,6 @@ export const SettingsView: React.FC = () => {
                 <p className="text-[10px] text-muted-foreground">
                   Oldest transcripts are automatically pruned when exceeding this limit.
                 </p>
-              </div>
-
-              <div className="border-t border-border/50 pt-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-semibold">Store Audio Recordings</h3>
-                    <p className="text-xs text-muted-foreground">
-                      Save recorded WAV samples locally alongside text transcripts.
-                    </p>
-                  </div>
-                  <Switch
-                    checked={settings.store_audio}
-                    onCheckedChange={(checked) => saveSettings({ store_audio: checked })}
-                  />
-                </div>
-
-                {/* Audio Storage Stats & Actions */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1 text-xs text-muted-foreground bg-secondary/30 p-2.5 rounded-md border border-border/50">
-                  <div className="flex items-center space-x-2">
-                    <Volume2 className="h-4 w-4 text-primary" />
-                    <span>
-                      <strong className="text-foreground">{recordings.length}</strong> {recordings.length === 1 ? "recording" : "recordings"} saved
-                      {" "}(<span className="font-mono">{formatStorageSize(totalRecordingsBytes)}</span>)
-                    </span>
-                  </div>
-
-                  <div className="flex items-center space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleOpenRecordingsDir}
-                      className="h-7 px-2.5 text-xs text-foreground hover:bg-secondary"
-                      title="Open recordings folder in File Explorer"
-                    >
-                      <FolderOpen className="h-3.5 w-3.5 mr-1" />
-                      Open Folder
-                    </Button>
-
-                    {recordings.length > 0 && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowClearRecordingsConfirm(true)}
-                        className="h-7 px-2.5 text-xs text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
-                        title="Delete all saved WAV recordings"
-                      >
-                        <Trash2 className="h-3.5 w-3.5 mr-1" />
-                        Delete All Saved Audio
-                      </Button>
-                    )}
-                  </div>
-                </div>
-
-                {showClearRecordingsConfirm && (
-                  <div className="p-3 border border-destructive/40 bg-destructive/10 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs">
-                    <div className="flex items-center space-x-2 text-destructive font-medium">
-                      <AlertTriangle className="h-4 w-4 shrink-0" />
-                      <span>Permanently delete all {recordings.length} saved audio files ({formatStorageSize(totalRecordingsBytes)})?</span>
-                    </div>
-                    <div className="flex items-center space-x-2 shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => setShowClearRecordingsConfirm(false)}
-                        className="h-6 px-2.5 text-xs"
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={async () => {
-                          await clearAllRecordings();
-                          setShowClearRecordingsConfirm(false);
-                        }}
-                        className="h-6 px-2.5 text-xs"
-                      >
-                        Yes, Delete All
-                      </Button>
-                    </div>
-                  </div>
-                )}
               </div>
             </CardContent>
           </Card>

@@ -6,6 +6,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
   initThemeManager();
+  initMobileMenu();
   initEditionSwitcher();
   initSimulator();
   initCopyButtons();
@@ -119,49 +120,157 @@ function initEditionSwitcher() {
 }
 
 /* ==========================================================================
-   1. Theme Management (Supporting 7 Desktop Themes & modern-web-guidance)
+   1. Theme Management (Matte Obsidian & Matte Parchment)
    ========================================================================== */
 const THEMES = {
-  dark: { name: 'Dark (Phosphor Green)', scheme: 'dark' },
-  amber: { name: 'Retro Amber CRT', scheme: 'dark' },
-  matrix: { name: 'Matrix Neon', scheme: 'dark' },
-  cyan: { name: 'Cyberpunk Cyan', scheme: 'dark' },
-  midnight: { name: 'Midnight Indigo', scheme: 'dark' },
-  light: { name: 'Clean Light', scheme: 'light' },
-  paper: { name: 'Warm Paper', scheme: 'light' }
+  dark: { name: 'Matte Obsidian (Dark)', scheme: 'dark' },
+  light: { name: 'Matte Parchment (Light)', scheme: 'light' }
 };
+
+function resolveTheme(raw) {
+  if (!raw) {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      return 'light';
+    }
+    return 'dark';
+  }
+  const val = String(raw).toLowerCase().trim();
+  if (val === 'light' || val === 'paper') {
+    return 'light';
+  }
+  return 'dark'; // dark, amber, matrix, cyan, midnight, or legacy values
+}
 
 function initThemeManager() {
   const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
-  const savedTheme = localStorage.getItem('whispertype_theme') || 'dark';
+  let currentTheme = 'dark';
+  try {
+    currentTheme = resolveTheme(localStorage.getItem('whispertype_theme'));
+  } catch (e) {
+    currentTheme = resolveTheme(null);
+  }
 
-  function setTheme(themeId) {
-    if (!THEMES[themeId]) themeId = 'dark';
-    document.documentElement.setAttribute('data-theme', themeId);
+  function setTheme(themeId, notify = false) {
+    const normalized = resolveTheme(themeId);
+    document.documentElement.setAttribute('data-theme', normalized);
     if (metaColorScheme) {
-      metaColorScheme.content = THEMES[themeId].scheme;
+      metaColorScheme.content = normalized;
     }
-    localStorage.setItem('whispertype_theme', themeId);
+    try {
+      localStorage.setItem('whispertype_theme', normalized);
+    } catch (e) {}
 
-    // Update active states on all theme pills & chips
+    // Update single header toggle button
+    const toggleBtn = document.getElementById('themeToggleBtn');
+    if (toggleBtn) {
+      const isLight = normalized === 'light';
+      toggleBtn.setAttribute('aria-pressed', isLight ? 'true' : 'false');
+      toggleBtn.setAttribute('aria-label', isLight ? 'Switch to dark mode' : 'Switch to light mode');
+      toggleBtn.setAttribute('title', isLight ? 'Switch to dark mode' : 'Switch to light mode');
+    }
+
+    // Update active states on simulator preview chips
     document.querySelectorAll('[data-set-theme]').forEach(btn => {
-      const isCurrent = btn.getAttribute('data-set-theme') === themeId;
+      const isCurrent = btn.getAttribute('data-set-theme') === normalized;
       btn.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
       btn.classList.toggle('active', isCurrent);
     });
+
+    if (notify) {
+      showToast(`Switched theme to ${THEMES[normalized]?.name || normalized}`);
+    }
   }
 
-  // Bind clicks on theme selectors
+  // Bind single toggle button
+  const toggleBtn = document.getElementById('themeToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const nextTheme = current === 'light' ? 'dark' : 'light';
+      setTheme(nextTheme, true);
+    });
+  }
+
+  // Bind any preview chips
   document.querySelectorAll('[data-set-theme]').forEach(btn => {
     btn.addEventListener('click', () => {
       const targetTheme = btn.getAttribute('data-set-theme');
-      setTheme(targetTheme);
-      showToast(`Switched theme to ${THEMES[targetTheme]?.name || targetTheme}`);
+      setTheme(targetTheme, true);
     });
   });
 
-  // Apply initially
-  setTheme(savedTheme);
+  // Listen for OS prefers-color-scheme changes when user hasn't explicitly set in storage
+  if (window.matchMedia) {
+    const mql = window.matchMedia('(prefers-color-scheme: light)');
+    mql.addEventListener('change', e => {
+      try {
+        if (!localStorage.getItem('whispertype_theme')) {
+          setTheme(e.matches ? 'light' : 'dark', false);
+        }
+      } catch (err) {}
+    });
+  }
+
+  // Apply initially (ensuring migration is persisted)
+  setTheme(currentTheme, false);
+}
+
+/* ==========================================================================
+   1b. Mobile Navigation Drawer
+   ========================================================================== */
+function initMobileMenu() {
+  const navToggleBtn = document.getElementById('navToggleBtn');
+  const siteNav = document.getElementById('siteNav');
+  const siteHeader = document.querySelector('.site-header');
+
+  if (!navToggleBtn || !siteNav) return;
+
+  function openMenu() {
+    navToggleBtn.setAttribute('aria-expanded', 'true');
+    navToggleBtn.setAttribute('aria-label', 'Close navigation menu');
+    siteNav.classList.add('is-open');
+  }
+
+  function closeMenu() {
+    navToggleBtn.setAttribute('aria-expanded', 'false');
+    navToggleBtn.setAttribute('aria-label', 'Open navigation menu');
+    siteNav.classList.remove('is-open');
+  }
+
+  function toggleMenu() {
+    const isOpen = navToggleBtn.getAttribute('aria-expanded') === 'true';
+    if (isOpen) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  }
+
+  navToggleBtn.addEventListener('click', toggleMenu);
+
+  // Close when clicking any nav link
+  siteNav.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+      closeMenu();
+    });
+  });
+
+  // Close when Escape key pressed
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && navToggleBtn.getAttribute('aria-expanded') === 'true') {
+      closeMenu();
+      navToggleBtn.focus();
+    }
+  });
+
+  // Close when clicking outside header
+  document.addEventListener('click', e => {
+    if (navToggleBtn.getAttribute('aria-expanded') === 'true') {
+      if (siteHeader && !siteHeader.contains(e.target)) {
+        closeMenu();
+      }
+    }
+  });
 }
 
 /* ==========================================================================

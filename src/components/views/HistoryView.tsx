@@ -43,33 +43,76 @@ export const HistoryView: React.FC = () => {
 
   // Audio playback state
   const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
+  const audioUrlsRef = React.useRef<Record<string, string>>({});
   const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
   const [activeAudioId, setActiveAudioId] = useState<string | null>(null);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioDuration, setAudioDuration] = useState(0);
+  const [audioPlaybackError, setAudioPlaybackError] = useState<{ id: string; message: string } | null>(null);
   const audioRef = React.useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     fetchHistory();
   }, [fetchHistory]);
 
-  // Clean up object URLs and audio element on unmount
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
+  // Clean up object URLs and audio element strictly on unmount
+  const teardownAudioElement = (clearRef: boolean = false) => {
+    if (audioRef.current) {
+      audioRef.current.onloadedmetadata = null;
+      audioRef.current.ontimeupdate = null;
+      audioRef.current.onplay = null;
+      audioRef.current.onpause = null;
+      audioRef.current.onended = null;
+      audioRef.current.onerror = null;
+      audioRef.current.pause();
+      if (clearRef) {
         audioRef.current = null;
       }
-      Object.values(audioUrls).forEach((url) => {
-        try {
-          if (url.startsWith("blob:")) URL.revokeObjectURL(url);
-        } catch {
-          // ignore
-        }
+    }
+  };
+
+  const revokeAllAudioUrls = () => {
+    Object.values(audioUrlsRef.current).forEach((url) => {
+      try {
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+    });
+    audioUrlsRef.current = {};
+    setAudioUrls({});
+  };
+
+  const releaseAudioFor = (id: string) => {
+    if (activeAudioId === id) {
+      teardownAudioElement(true);
+      setActiveAudioId(null);
+      setIsAudioPlaying(false);
+    }
+    const url = audioUrlsRef.current[id] || audioUrls[id];
+    if (url) {
+      try {
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+      } catch {
+        // ignore
+      }
+      delete audioUrlsRef.current[id];
+      setAudioUrls((prev) => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
       });
+    }
+    setAudioPlaybackError((prev) => (prev?.id === id ? null : prev));
+  };
+
+  useEffect(() => {
+    return () => {
+      teardownAudioElement(true);
+      revokeAllAudioUrls();
     };
-  }, [audioUrls]);
+  }, []);
 
   const recordingMap = useMemo(() => {
     const map = new Map<string, SavedRecordingInfo>();
@@ -88,40 +131,57 @@ export const HistoryView: React.FC = () => {
     return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
   };
 
-  const startPlaybackWithUrl = (id: string, url: string) => {
-    if (audioRef.current) {
-      audioRef.current.pause();
+  const startPlaybackWithUrl = (id: string, url: string, audioEl: HTMLAudioElement) => {
+    if (audioEl.src !== url) {
+      audioEl.src = url;
     }
-    const audio = new Audio(url);
-    audioRef.current = audio;
     setAudioProgress(0);
     setAudioDuration(0);
 
-    audio.onloadedmetadata = () => {
-      if (Number.isFinite(audio.duration)) {
-        setAudioDuration(audio.duration);
+    audioEl.onloadedmetadata = () => {
+      if (Number.isFinite(audioEl.duration) && audioEl.duration > 0) {
+        setAudioDuration(audioEl.duration);
       }
     };
-    audio.ontimeupdate = () => {
-      setAudioProgress(audio.currentTime);
+    audioEl.ontimeupdate = () => {
+      setAudioProgress(audioEl.currentTime);
     };
-    audio.onplay = () => setIsAudioPlaying(true);
-    audio.onpause = () => setIsAudioPlaying(false);
-    audio.onended = () => {
+    audioEl.onplay = () => setIsAudioPlaying(true);
+    audioEl.onpause = () => setIsAudioPlaying(false);
+    audioEl.onended = () => {
       setIsAudioPlaying(false);
       setAudioProgress(0);
     };
+    audioEl.onerror = () => {
+      setIsAudioPlaying(false);
+      const errMessage = audioEl.error?.message || "Audio playback error occurred";
+      setAudioPlaybackError({ id, message: errMessage });
+    };
 
     setActiveAudioId(id);
-    audio.play().catch((e) => {
+    audioEl.play().catch((e) => {
       console.warn("Audio play warning:", e);
+      setIsAudioPlaying(false);
+      setAudioPlaybackError({
+        id,
+        message: e instanceof Error ? e.message : "Audio playback was blocked or failed",
+      });
     });
   };
 
   const handleTogglePlayPauseCurrent = () => {
     if (!audioRef.current) return;
     if (audioRef.current.paused) {
-      audioRef.current.play().catch(() => {});
+      setAudioPlaybackError(null);
+      audioRef.current.play().catch((e) => {
+        console.warn("Audio play error on resume:", e);
+        if (activeAudioId) {
+          setAudioPlaybackError({
+            id: activeAudioId,
+            message: e instanceof Error ? e.message : "Failed to resume audio playback",
+          });
+        }
+      });
     } else {
       audioRef.current.pause();
     }
@@ -143,80 +203,125 @@ export const HistoryView: React.FC = () => {
       return;
     }
 
-    if (audioUrls[id]) {
-      startPlaybackWithUrl(id, audioUrls[id]);
+    setAudioPlaybackError(null);
+
+    // Stop and clear listeners on any previous audio playback
+    teardownAudioElement(false);
+
+    // Synchronously create/obtain HTMLAudioElement within the user click gesture
+    const audio = audioRef.current || new Audio();
+    audioRef.current = audio;
+
+    const existingUrl = audioUrlsRef.current[id] || audioUrls[id];
+    if (existingUrl) {
+      startPlaybackWithUrl(id, existingUrl, audio);
       return;
     }
 
     try {
       setLoadingAudioId(id);
-      const bytes = await invokeTauri<number[]>("get_recording_audio", { id });
-      const uint8 = new Uint8Array(bytes);
-      const blob = new Blob([uint8], { type: "audio/wav" });
+      const raw = await invokeTauri<number[] | Uint8Array | ArrayBuffer>("get_recording_audio", { id });
+
+      // Guard against race condition if user clicked another track while IPC was resolving
+      if (audioRef.current !== audio) {
+        return;
+      }
+
+      let uint8: Uint8Array;
+      if (raw instanceof Uint8Array) {
+        uint8 = raw;
+      } else if (raw instanceof ArrayBuffer) {
+        uint8 = new Uint8Array(raw);
+      } else if (Array.isArray(raw)) {
+        uint8 = new Uint8Array(raw);
+      } else {
+        uint8 = new Uint8Array(raw as any);
+      }
+
+      // Verify valid RIFF/WAV header ('RIFF' = 0x52, 0x49, 0x46, 0x46)
+      if (
+        uint8.length < 44 ||
+        uint8[0] !== 0x52 ||
+        uint8[1] !== 0x49 ||
+        uint8[2] !== 0x46 ||
+        uint8[3] !== 0x46
+      ) {
+        throw new Error("Invalid audio recording: missing RIFF header");
+      }
+
+      const blob = new Blob([uint8 as unknown as BlobPart], { type: "audio/wav" });
       const url = URL.createObjectURL(blob);
+      audioUrlsRef.current[id] = url;
       setAudioUrls((prev) => ({ ...prev, [id]: url }));
-      startPlaybackWithUrl(id, url);
+      startPlaybackWithUrl(id, url, audio);
     } catch (err) {
       console.warn("get_recording_audio error:", err);
+      if (audioRef.current === audio) {
+        setActiveAudioId(null);
+        setIsAudioPlaying(false);
+      }
+      setAudioPlaybackError({
+        id,
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setLoadingAudioId(null);
     }
   };
 
   const renderInlineAudioPlayer = (id: string, fallbackDurationSec?: number) => {
-    const url = audioUrls[id];
+    const url = audioUrls[id] || audioUrlsRef.current[id];
     if (activeAudioId !== id || !url) return null;
     const totalSec = audioDuration > 0 ? audioDuration : fallbackDurationSec || 1;
     const pct = Math.min(100, Math.max(0, (audioProgress / totalSec) * 100));
 
     return (
-      <div className="mt-2.5 p-2.5 rounded-xl bg-secondary/75 border border-border flex items-center gap-3">
-        <button
-          type="button"
-          onClick={handleTogglePlayPauseCurrent}
-          aria-label={isAudioPlaying ? "Pause recording" : "Play recording"}
-          className="h-8 w-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:bg-primary/90 transition-colors cursor-pointer shadow-sm"
-        >
-          {isAudioPlaying ? (
-            <VolumeX className="h-4 w-4" aria-hidden="true" />
-          ) : (
-            <Play className="h-4 w-4 ml-0.5" aria-hidden="true" />
-          )}
-        </button>
+      <div className="mt-2.5 p-2.5 rounded-xl bg-secondary/75 border border-border flex flex-col gap-2">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleTogglePlayPauseCurrent}
+            aria-label={isAudioPlaying ? "Pause recording" : "Play recording"}
+            className="h-8 w-8 rounded-lg bg-primary text-primary-foreground flex items-center justify-center shrink-0 hover:bg-primary/90 transition-colors cursor-pointer shadow-sm"
+          >
+            {isAudioPlaying ? (
+              <VolumeX className="h-4 w-4" aria-hidden="true" />
+            ) : (
+              <Play className="h-4 w-4 ml-0.5" aria-hidden="true" />
+            )}
+          </button>
 
-        <div className="flex-1 flex flex-col gap-1">
-          <input
-            type="range"
-            min={0}
-            max={totalSec}
-            step={0.05}
-            value={Math.min(audioProgress, totalSec)}
-            onChange={(e) => handleSeekAudio(Number(e.target.value))}
-            aria-label="Seek audio position"
-            className="w-full accent-primary h-1.5 bg-background rounded-lg cursor-pointer"
-          />
-          <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
-            <span>{audioProgress.toFixed(1)}s</span>
-            <span>{pct.toFixed(0)}%</span>
-            <span>{totalSec.toFixed(1)}s</span>
+          <div className="flex-1 flex flex-col gap-1">
+            <input
+              type="range"
+              min={0}
+              max={totalSec}
+              step={0.05}
+              value={Math.min(audioProgress, totalSec)}
+              onChange={(e) => handleSeekAudio(Number(e.target.value))}
+              aria-label="Seek audio position"
+              className="w-full accent-primary h-1.5 bg-background rounded-lg cursor-pointer"
+            />
+            <div className="flex items-center justify-between text-[10px] font-mono text-muted-foreground">
+              <span>{audioProgress.toFixed(1)}s</span>
+              <span>{pct.toFixed(0)}%</span>
+              <span>{totalSec.toFixed(1)}s</span>
+            </div>
           </div>
         </div>
+
+        {audioPlaybackError && audioPlaybackError.id === id && (
+          <div className="text-[11px] text-destructive flex items-center gap-1.5 pl-0.5">
+            <AlertTriangle className="h-3 w-3 shrink-0" />
+            <span>Playback warning: {audioPlaybackError.message}</span>
+          </div>
+        )}
       </div>
     );
   };
 
   const handleDeleteAudio = async (id: string) => {
-    if (audioUrls[id]) {
-      URL.revokeObjectURL(audioUrls[id]);
-      setAudioUrls((prev) => {
-        const copy = { ...prev };
-        delete copy[id];
-        return copy;
-      });
-    }
-    if (activeAudioId === id) {
-      setActiveAudioId(null);
-    }
+    releaseAudioFor(id);
     await deleteRecording(id);
   };
 
@@ -389,11 +494,11 @@ export const HistoryView: React.FC = () => {
               variant="destructive"
               size="sm"
               onClick={async () => {
-                if (audioRef.current) {
-                  audioRef.current.pause();
-                }
+                teardownAudioElement(true);
                 setActiveAudioId(null);
                 setIsAudioPlaying(false);
+                setAudioPlaybackError(null);
+                revokeAllAudioUrls();
                 await clearAllRecordings();
                 setShowClearAudioConfirm(false);
               }}
@@ -428,11 +533,11 @@ export const HistoryView: React.FC = () => {
                 variant="outline"
                 size="sm"
                 onClick={async () => {
-                  if (audioRef.current) {
-                    audioRef.current.pause();
-                  }
+                  teardownAudioElement(true);
                   setActiveAudioId(null);
                   setIsAudioPlaying(false);
+                  setAudioPlaybackError(null);
+                  revokeAllAudioUrls();
                   await clearAllRecordings();
                   setShowClearConfirm(false);
                 }}
@@ -445,11 +550,11 @@ export const HistoryView: React.FC = () => {
               variant="destructive"
               size="sm"
               onClick={async () => {
-                if (audioRef.current) {
-                  audioRef.current.pause();
-                }
+                teardownAudioElement(true);
                 setActiveAudioId(null);
                 setIsAudioPlaying(false);
+                setAudioPlaybackError(null);
+                revokeAllAudioUrls();
                 await clearAllHistory();
                 setShowClearConfirm(false);
               }}
@@ -621,6 +726,7 @@ export const HistoryView: React.FC = () => {
                             variant="destructive"
                             size="sm"
                             onClick={async () => {
+                              releaseAudioFor(rec.id);
                               await deleteHistory(rec.id);
                               setConfirmDeleteEntryId(null);
                             }}
@@ -642,6 +748,12 @@ export const HistoryView: React.FC = () => {
                     )}
 
                     {isPlaying && audioUrl && renderInlineAudioPlayer(rec.id, rec.duration_seconds)}
+                    {audioPlaybackError && audioPlaybackError.id === rec.id && !isPlaying && (
+                      <div className="mt-1 text-xs text-destructive flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        <span>Audio playback error: {audioPlaybackError.message}</span>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -786,6 +898,7 @@ export const HistoryView: React.FC = () => {
                               confirmDeleteEntryId === entry.id ? null : entry.id
                             );
                           } else {
+                            releaseAudioFor(entry.id);
                             deleteHistory(entry.id);
                           }
                         }}
@@ -831,6 +944,7 @@ export const HistoryView: React.FC = () => {
                           variant="destructive"
                           size="sm"
                           onClick={async () => {
+                            releaseAudioFor(entry.id);
                             await deleteHistory(entry.id);
                             setConfirmDeleteEntryId(null);
                           }}
@@ -878,6 +992,12 @@ export const HistoryView: React.FC = () => {
 
                   {/* Inline Audio Player */}
                   {isPlaying && audioUrl && renderInlineAudioPlayer(entry.id, entry.duration_ms / 1000)}
+                  {audioPlaybackError && audioPlaybackError.id === entry.id && !isPlaying && (
+                    <div className="mt-1 text-xs text-destructive flex items-center gap-1.5">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      <span>Audio playback error: {audioPlaybackError.message}</span>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             );
@@ -953,6 +1073,12 @@ export const HistoryView: React.FC = () => {
                     </div>
 
                     {isPlaying && audioUrl && renderInlineAudioPlayer(rec.id, rec.duration_seconds)}
+                    {audioPlaybackError && audioPlaybackError.id === rec.id && !isPlaying && (
+                      <div className="mt-1 text-xs text-destructive flex items-center gap-1.5">
+                        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                        <span>Audio playback error: {audioPlaybackError.message}</span>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );

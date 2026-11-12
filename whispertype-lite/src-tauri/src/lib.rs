@@ -421,7 +421,6 @@ fn update_history_entry(id: String, text: String, db: State<'_, Database>, app: 
 
 #[tauri::command]
 fn delete_history(id: String, db: State<'_, Database>, app: AppHandle) -> Result<bool, String> {
-    let _ = crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id);
     let res = db.delete_history(&id).map_err(|e| e.to_string())?;
     crate::tray::update_tray_menu(&app);
     Ok(res)
@@ -429,7 +428,6 @@ fn delete_history(id: String, db: State<'_, Database>, app: AppHandle) -> Result
 
 #[tauri::command]
 fn clear_history(db: State<'_, Database>, app: AppHandle) -> Result<usize, String> {
-    let _ = crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir());
     let res = db.clear_history().map_err(|e| e.to_string())?;
     crate::tray::update_tray_menu(&app);
     Ok(res)
@@ -598,35 +596,6 @@ fn open_log_dir() -> Result<(), String> {
     let dir = logging::get_default_log_dir();
     let dir_str = dir.to_string_lossy().to_string();
     open_system_url(dir_str)
-}
-
-#[tauri::command]
-fn list_recordings() -> Result<Vec<crate::storage::SavedRecordingInfo>, String> {
-    crate::storage::list_saved_recordings(&crate::storage::get_default_recordings_dir())
-}
-
-#[tauri::command]
-fn get_recording_audio(id: String) -> Result<Vec<u8>, String> {
-    crate::storage::get_recording_wav_bytes(&crate::storage::get_default_recordings_dir(), &id)
-}
-
-#[tauri::command]
-fn delete_recording(id: String) -> Result<bool, String> {
-    crate::storage::delete_recording_file(&crate::storage::get_default_recordings_dir(), &id)
-}
-
-#[tauri::command]
-fn clear_recordings() -> Result<usize, String> {
-    crate::storage::clear_all_recordings(&crate::storage::get_default_recordings_dir())
-}
-
-#[tauri::command]
-fn open_recordings_dir() -> Result<(), String> {
-    let dir = crate::storage::get_default_recordings_dir();
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    }
-    open_system_url(dir.to_string_lossy().to_string())
 }
 
 // ==========================================
@@ -856,11 +825,6 @@ pub fn run() {
             import_dictionary,
             open_system_url,
             open_log_dir,
-            open_recordings_dir,
-            list_recordings,
-            get_recording_audio,
-            delete_recording,
-            clear_recordings,
             get_settings,
             update_settings,
             get_history,

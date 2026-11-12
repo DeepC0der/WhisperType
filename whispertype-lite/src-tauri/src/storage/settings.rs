@@ -202,9 +202,6 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub persistent_history: bool,
 
-    #[serde(default)]
-    pub store_audio: bool,
-
     #[serde(default = "default_thread_count")]
     pub thread_count: u32,
 
@@ -315,7 +312,6 @@ impl Default for AppSettings {
             audio_gain_percent: default_gain_percent(),
             max_recording_seconds: default_max_recording_seconds(),
             persistent_history: true,
-            store_audio: false,
             thread_count: default_thread_count(),
             overlay_size: default_overlay_size(),
             dim_delay_seconds: default_dim_delay_seconds(),
@@ -515,5 +511,12 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_backward_compatibility_unknown_fields() {
+        let old_json = r#"{"hotkey":"Ctrl+Shift+Space","store_audio":true,"legacy_field":"ignored"}"#;
+        let s: Result<AppSettings, _> = serde_json::from_str(old_json);
+        assert!(s.is_ok());
     }
 }

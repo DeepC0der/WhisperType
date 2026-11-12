@@ -28,7 +28,6 @@ export interface AppSettings {
   audio_gain_percent: number;
   max_recording_seconds: number;
   persistent_history: boolean;
-  store_audio: boolean;
   thread_count: number;
   overlay_size: string;
   dim_delay_seconds: number;
@@ -72,14 +71,6 @@ export interface HistoryRecord {
   inference_ms: number;
   refined_text?: string | null;
   mode?: string | null;
-}
-
-export interface SavedRecordingInfo {
-  id: string;
-  file_name: string;
-  file_path: string;
-  size_bytes: number;
-  duration_seconds: number;
 }
 
 export interface DictionaryRecord {
@@ -135,7 +126,6 @@ export const defaultSettings: AppSettings = {
   audio_gain_percent: 100,
   max_recording_seconds: 60,
   persistent_history: true,
-  store_audio: false,
   thread_count: 2,
   overlay_size: "M",
   dim_delay_seconds: 2,
@@ -179,7 +169,6 @@ interface AppStore {
   micLevel: number;
   settings: AppSettings;
   history: HistoryRecord[];
-  recordings: SavedRecordingInfo[];
   dictionary: DictionaryRecord[];
   audioDevices: AudioDeviceInfo[];
   modelStatus: ModelStatus | null;
@@ -204,9 +193,6 @@ interface AppStore {
   fetchHistory: () => Promise<void>;
   deleteHistory: (id: string) => Promise<void>;
   clearAllHistory: () => Promise<void>;
-  fetchRecordings: () => Promise<void>;
-  deleteRecording: (id: string) => Promise<void>;
-  clearAllRecordings: () => Promise<void>;
   updateHistoryText: (id: string, text: string) => Promise<void>;
   reinsertHistory: (text: string) => Promise<void>;
   fetchDictionary: () => Promise<void>;
@@ -259,7 +245,6 @@ export const useAppStore = create<AppStore>((set, get) => ({
         },
       ]
     : [],
-  recordings: [],
   dictionary: !isTauri()
     ? [
         {
@@ -370,56 +355,25 @@ export const useAppStore = create<AppStore>((set, get) => ({
     } catch {
       // Fallback
     }
-    get().fetchRecordings();
   },
 
   deleteHistory: async (id: string) => {
     set((state) => ({
       history: state.history.filter((h) => h.id !== id),
-      recordings: state.recordings.filter((r) => r.id !== id),
     }));
     try {
       await invokeTauri("delete_history", { id });
     } catch (err) {
       console.warn("delete_history error:", err);
     }
-    get().fetchRecordings();
   },
 
   clearAllHistory: async () => {
-    set({ history: [], recordings: [] });
+    set({ history: [] });
     try {
       await invokeTauri("clear_history");
     } catch (err) {
       console.warn("clear_history error:", err);
-    }
-    get().fetchRecordings();
-  },
-
-  fetchRecordings: async () => {
-    try {
-      const list = await invokeTauri<SavedRecordingInfo[]>("list_recordings");
-      set({ recordings: list });
-    } catch {
-      // Fallback
-    }
-  },
-
-  deleteRecording: async (id: string) => {
-    set((state) => ({ recordings: state.recordings.filter((r) => r.id !== id) }));
-    try {
-      await invokeTauri("delete_recording", { id });
-    } catch (err) {
-      console.warn("delete_recording error:", err);
-    }
-  },
-
-  clearAllRecordings: async () => {
-    set({ recordings: [] });
-    try {
-      await invokeTauri("clear_recordings");
-    } catch (err) {
-      console.warn("clear_recordings error:", err);
     }
   },
 

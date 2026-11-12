@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>WhisperType — Private, Sub-70ms Local Speech-to-Text for Windows</title>
   <meta name="description" content="High-performance, 100% offline speech-to-text dictation for Windows. Powered by NVIDIA Parakeet TDT 0.6B (Int8), RTF 0.066, dual-mode text injection, and retro CRT HUD.">
   <meta name="color-scheme" content="light dark">
@@ -10,11 +10,24 @@
   <script>
     (function() {
       try {
-        var savedTheme = localStorage.getItem("whispertype_theme") || "dark";
-        document.documentElement.setAttribute("data-theme", savedTheme);
+        var saved = localStorage.getItem("whispertype_theme");
+        var theme = "dark";
+        if (saved) {
+          if (saved === "light" || saved === "paper") {
+            theme = "light";
+          } else {
+            theme = "dark";
+          }
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+          theme = "light";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
         var meta = document.querySelector('meta[name="color-scheme"]');
         if (meta) {
-          meta.content = (savedTheme === 'light' || savedTheme === 'paper') ? 'light' : 'dark';
+          meta.content = theme;
+        }
+        if (saved && saved !== theme) {
+          localStorage.setItem("whispertype_theme", theme);
         }
       } catch (e) {}
     })();
@@ -53,7 +66,7 @@
         <span class="brand-pill">v0.1.0</span>
       </a>
 
-      <nav aria-label="Main Navigation">
+      <nav class="site-nav" id="siteNav" aria-label="Main Navigation">
         <ul class="nav-links">
           <li><a href="#simulator" class="nav-link">Live Simulator</a></li>
           <li><a href="#editions" class="nav-link">Lite vs. Standard</a></li>
@@ -70,20 +83,34 @@
       </nav>
 
       <div class="header-actions">
-        <!-- 7-Theme Live Color Palette Picker -->
-        <div class="theme-picker" role="group" aria-label="Select Color Theme">
-          <button type="button" class="theme-pill-btn" data-set-theme="dark" title="Dark (Phosphor Green)" style="background: #35e28a; color: #35e28a;" aria-pressed="true"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="amber" title="Retro Amber CRT" style="background: #faa018; color: #faa018;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="matrix" title="Matrix Neon" style="background: #00ff40; color: #00ff40;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="cyan" title="Cyberpunk Cyan" style="background: #12e0f7; color: #12e0f7;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="midnight" title="Midnight Indigo" style="background: #5a8afc; color: #5a8afc;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="light" title="Clean Light" style="background: #ffffff; color: #18a85f;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="paper" title="Warm Paper" style="background: #faf8f3; color: #a35817;" aria-pressed="false"></button>
-        </div>
+        <!-- Single Theme Toggle Button (Matte Obsidian & Matte Parchment) -->
+        <button type="button" class="theme-toggle-btn" id="themeToggleBtn" aria-label="Switch to light mode" aria-pressed="false" title="Switch to light mode">
+          <svg class="theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2"></path>
+            <path d="M12 20v2"></path>
+            <path d="m4.93 4.93 1.41 1.41"></path>
+            <path d="m17.66 17.66 1.41 1.41"></path>
+            <path d="M2 12h2"></path>
+            <path d="M20 12h2"></path>
+            <path d="m6.34 17.66-1.41 1.41"></path>
+            <path d="m19.07 4.93-1.41 1.41"></path>
+          </svg>
+          <svg class="theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+        </button>
 
-        <a href="#download" class="btn-primary" style="padding: 0.55rem 1.15rem; font-size: 0.85rem;">
+        <a href="#download" class="btn-primary header-download-btn">
           Download
         </a>
+
+        <!-- Accessible Mobile Navigation Hamburger Toggle -->
+        <button type="button" class="nav-toggle-btn" id="navToggleBtn" aria-expanded="false" aria-controls="siteNav" aria-label="Open navigation menu">
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+        </button>
       </div>
     </div>
   </header>
@@ -148,7 +175,7 @@
 
         <!-- Interactive Live HUD & Dictation Simulator -->
         <div class="hero-simulator-container" id="simulator">
-          <div class="simulator-window-bar">
+          <div class="simulator-window-bar sim-hud-top">
             <div class="sim-window-dots">
               <span></span><span></span><span></span>
             </div>
@@ -207,12 +234,7 @@
             <div class="sim-themes-group">
               <span>Preview Theme:</span>
               <button type="button" class="theme-chip active" data-set-theme="dark">Dark</button>
-              <button type="button" class="theme-chip" data-set-theme="amber">Amber CRT</button>
-              <button type="button" class="theme-chip" data-set-theme="matrix">Matrix</button>
-              <button type="button" class="theme-chip" data-set-theme="cyan">Cyan</button>
-              <button type="button" class="theme-chip" data-set-theme="midnight">Midnight</button>
               <button type="button" class="theme-chip" data-set-theme="light">Light</button>
-              <button type="button" class="theme-chip" data-set-theme="paper">Paper</button>
             </div>
           </div>
         </div>
