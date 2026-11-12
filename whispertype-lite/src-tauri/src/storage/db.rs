@@ -609,7 +609,7 @@ mod tests {
             is_case_sensitive: false,
             created_at: "".into(),
         }];
-        let test_sentence = "AMIN detected high contamination and took vitamin D with AMIN.";
+        let test_sentence = "PORT detected important matters and took transport with PORT.";
         let res_port = apply_dictionary(test_sentence, &port_rule);
         assert_eq!(
             res_port,

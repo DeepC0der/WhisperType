@@ -2,7 +2,7 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>WhisperType — Private, Sub-70ms Local Speech-to-Text for Windows</title>
   <meta name="description" content="High-performance, 100% offline speech-to-text dictation for Windows. Powered by NVIDIA Parakeet TDT 0.6B (Int8), RTF 0.066, dual-mode text injection, and retro CRT HUD.">
   <meta name="color-scheme" content="light dark">
@@ -10,11 +10,24 @@
   <script>
     (function() {
       try {
-        var savedTheme = localStorage.getItem("whispertype_theme") || "dark";
-        document.documentElement.setAttribute("data-theme", savedTheme);
+        var saved = localStorage.getItem("whispertype_theme");
+        var theme = "dark";
+        if (saved) {
+          if (saved === "light" || saved === "paper") {
+            theme = "light";
+          } else {
+            theme = "dark";
+          }
+        } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+          theme = "light";
+        }
+        document.documentElement.setAttribute("data-theme", theme);
         var meta = document.querySelector('meta[name="color-scheme"]');
         if (meta) {
-          meta.content = (savedTheme === 'light' || savedTheme === 'paper') ? 'light' : 'dark';
+          meta.content = theme;
+        }
+        if (saved && saved !== theme) {
+          localStorage.setItem("whispertype_theme", theme);
         }
       } catch (e) {}
     })();
@@ -53,15 +66,16 @@
         <span class="brand-pill">v0.1.0</span>
       </a>
 
-      <nav aria-label="Main Navigation">
+      <nav class="site-nav" id="siteNav" aria-label="Main Navigation">
         <ul class="nav-links">
           <li><a href="#simulator" class="nav-link">Live Simulator</a></li>
           <li><a href="#editions" class="nav-link">Lite vs. Standard</a></li>
           <li><a href="#features" class="nav-link">Features</a></li>
           <li><a href="#download" class="nav-link">Downloads</a></li>
           <li><a href="#specs" class="nav-link">Specs</a></li>
+          <li><a href="#faq" class="nav-link">Architecture &amp; FAQ</a></li>
           <li>
-            <a href="https://github.com/DeepC0der/whispertype" target="_blank" rel="noopener noreferrer" class="nav-link">
+            <a href="https://github.com/DeepC0der/WhisperType" target="_blank" rel="noopener noreferrer" class="nav-link">
               GitHub ↗
             </a>
           </li>
@@ -69,20 +83,34 @@
       </nav>
 
       <div class="header-actions">
-        <!-- 7-Theme Live Color Palette Picker -->
-        <div class="theme-picker" role="group" aria-label="Select Color Theme">
-          <button type="button" class="theme-pill-btn" data-set-theme="dark" title="Dark (Phosphor Green)" style="background: #35e28a; color: #35e28a;" aria-pressed="true"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="amber" title="Retro Amber CRT" style="background: #faa018; color: #faa018;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="matrix" title="Matrix Neon" style="background: #00ff40; color: #00ff40;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="cyan" title="Cyberpunk Cyan" style="background: #12e0f7; color: #12e0f7;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="midnight" title="Midnight Indigo" style="background: #5a8afc; color: #5a8afc;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="light" title="Clean Light" style="background: #ffffff; color: #18a85f;" aria-pressed="false"></button>
-          <button type="button" class="theme-pill-btn" data-set-theme="paper" title="Warm Paper" style="background: #faf8f3; color: #a35817;" aria-pressed="false"></button>
-        </div>
+        <!-- Single Theme Toggle Button (Matte Obsidian & Matte Parchment) -->
+        <button type="button" class="theme-toggle-btn" id="themeToggleBtn" aria-label="Switch to light mode" aria-pressed="false" title="Switch to light mode">
+          <svg class="theme-icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"></circle>
+            <path d="M12 2v2"></path>
+            <path d="M12 20v2"></path>
+            <path d="m4.93 4.93 1.41 1.41"></path>
+            <path d="m17.66 17.66 1.41 1.41"></path>
+            <path d="M2 12h2"></path>
+            <path d="M20 12h2"></path>
+            <path d="m6.34 17.66-1.41 1.41"></path>
+            <path d="m19.07 4.93-1.41 1.41"></path>
+          </svg>
+          <svg class="theme-icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path>
+          </svg>
+        </button>
 
-        <a href="#download" class="btn-primary" style="padding: 0.55rem 1.15rem; font-size: 0.85rem;">
+        <a href="#download" class="btn-primary header-download-btn">
           Download
         </a>
+
+        <!-- Accessible Mobile Navigation Hamburger Toggle -->
+        <button type="button" class="nav-toggle-btn" id="navToggleBtn" aria-expanded="false" aria-controls="siteNav" aria-label="Open navigation menu">
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+          <span class="nav-toggle-bar"></span>
+        </button>
       </div>
     </div>
   </header>
@@ -103,24 +131,51 @@
 
         <p class="hero-subtitle">
           WhisperType is an ultra-fast, offline speech-to-text dictation desktop app for Windows 10 & 11.
-          Powered by <strong>NVIDIA Parakeet TDT 0.6B</strong> running locally on your CPU/GPU with dual-mode text injection
-          into any active window and an anti-distraction floating HUD.
+          Powered by specialized <strong>NVIDIA Parakeet TDT 0.6B Int8 ASR</strong> running locally on your CPU with sub-70ms latency,
+          dual-mode text injection into any active window, and an optional <strong>Pro AI Mode</strong> for local LLM formatting.
         </p>
 
         <div class="hero-cta-group">
-          <a href="#download" class="btn-primary">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            Download for Windows (x64)
+          <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-setup.exe" class="hero-edition-btn hero-lite-btn" title="Download WhisperType Lite for everyday laptops and PCs">
+            <div class="hero-btn-icon">
+              <img src="/logo-lite.png" alt="WhisperType Lite logo" width="28" height="28" style="border-radius: 6px; display: block;" />
+            </div>
+            <div class="hero-btn-body">
+              <div class="hero-btn-heading">
+                <span class="hero-btn-title">Download WhisperType Lite</span>
+                <span class="hero-pill-mini">~35 MB IDLE</span>
+              </div>
+              <span class="hero-btn-desc">Everyday PCs &amp; Laptops &bull; 2 CPU Threads &bull; Pure Parakeet ASR</span>
+            </div>
           </a>
-          <a href="#simulator" class="btn-secondary">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
-            Try Live Simulator
+
+          <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-setup.exe" class="hero-edition-btn hero-standard-btn" title="Download WhisperType Standard for workstations and local LLMs">
+            <div class="hero-btn-icon">
+              <img src="/logo.png" alt="WhisperType Standard logo" width="28" height="28" style="border-radius: 6px; display: block;" />
+            </div>
+            <div class="hero-btn-body">
+              <div class="hero-btn-heading">
+                <span class="hero-btn-title">Download WhisperType Standard</span>
+                <span class="hero-pill-mini pro-mini">PRO AI MODE</span>
+              </div>
+              <span class="hero-btn-desc">High-Spec PCs &amp; Workstations &bull; LM Studio &bull; Markdown Notes</span>
+            </div>
           </a>
+
+          <div class="hero-aux-links">
+            <a href="#simulator" class="btn-secondary" style="padding: 0.65rem 1.2rem; font-size: 0.88rem;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16 10 8"/></svg>
+              Try Live Simulator
+            </a>
+            <a href="#editions" class="hero-link-jump">
+              Compare Lite vs. Standard ↓
+            </a>
+          </div>
         </div>
 
         <!-- Interactive Live HUD & Dictation Simulator -->
         <div class="hero-simulator-container" id="simulator">
-          <div class="simulator-window-bar">
+          <div class="simulator-window-bar sim-hud-top">
             <div class="sim-window-dots">
               <span></span><span></span><span></span>
             </div>
@@ -179,12 +234,7 @@
             <div class="sim-themes-group">
               <span>Preview Theme:</span>
               <button type="button" class="theme-chip active" data-set-theme="dark">Dark</button>
-              <button type="button" class="theme-chip" data-set-theme="amber">Amber CRT</button>
-              <button type="button" class="theme-chip" data-set-theme="matrix">Matrix</button>
-              <button type="button" class="theme-chip" data-set-theme="cyan">Cyan</button>
-              <button type="button" class="theme-chip" data-set-theme="midnight">Midnight</button>
               <button type="button" class="theme-chip" data-set-theme="light">Light</button>
-              <button type="button" class="theme-chip" data-set-theme="paper">Paper</button>
             </div>
           </div>
         </div>
@@ -198,7 +248,7 @@
           <span class="section-tag">TAILORED TO YOUR HARDWARE</span>
           <h2 class="section-title">Two Editions. Zero Cloud Compromises.</h2>
           <p class="section-subtitle">
-            Whether you want pure, featherweight voice-to-text on an everyday laptop or local LLM-powered structured notes on a workstation, WhisperType scales to your machine.
+            Whether you need featherweight, low-memory voice-to-text on an everyday laptop or a powerhouse local LLM voice workstation, WhisperType is purpose-built for your machine.
           </p>
         </div>
 
@@ -207,12 +257,15 @@
           <article class="edition-card edition-lite" data-edition-card="lite">
             <div class="edition-card-top">
               <div class="edition-badge-row">
-                <span class="edition-pill lite">EVERYDAY HARDWARE &bull; 4 GB+ RAM</span>
-                <span class="edition-footprint">~180 MB RAM</span>
+                <span class="edition-pill lite">EVERYDAY PCS &amp; LAPTOPS &bull; 4 GB+ RAM</span>
+                <span class="edition-footprint">~35 MB IDLE RAM</span>
               </div>
-              <h3 class="edition-name">WhisperType <span class="lite-accent">Lite</span></h3>
+              <h3 class="edition-name" style="display: flex; align-items: center; gap: 0.75rem;">
+                <img src="/logo-lite.png" alt="WhisperType Lite logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+                <span>WhisperType <span class="lite-accent">Lite</span></span>
+              </h3>
               <p class="edition-tagline">
-                Pure, distraction-free offline transcription with built-in audio &amp; transcript playback review. Engineered for maximum speed and minimal resource usage on any Windows PC.
+                Completely stripped of Local LLM / LM Studio and Pro Mode overhead so it runs effortlessly on any normal PC or laptop. Pure NVIDIA Parakeet TDT 0.6B Int8 speech-to-text with instant auto-unload.
               </p>
             </div>
 
@@ -222,12 +275,12 @@
                 <span class="ed-metric-lbl">ASR Latency</span>
               </div>
               <div class="ed-metric">
-                <span class="ed-metric-val">0.066x</span>
-                <span class="ed-metric-lbl">Real-Time Factor</span>
+                <span class="ed-metric-val">~35 MB</span>
+                <span class="ed-metric-lbl">Idle RAM</span>
               </div>
               <div class="ed-metric">
-                <span class="ed-metric-val">CPU Int8</span>
-                <span class="ed-metric-lbl">No GPU Required</span>
+                <span class="ed-metric-val">2 Threads</span>
+                <span class="ed-metric-lbl">Low CPU Load</span>
               </div>
             </div>
 
@@ -235,37 +288,44 @@
               <li>
                 <span class="check-icon lite">✓</span>
                 <div>
-                  <strong>NVIDIA Parakeet-TDT 0.6B (Int8)</strong>
-                  <span>Sub-70ms offline voice-to-text directly into any active app</span>
+                  <strong>Completely Stripped of Local LLM Overhead</strong>
+                  <span>Zero LM Studio background processes, zero tokenizer overhead, and no GPU required—pure, laser-focused voice typing</span>
                 </div>
               </li>
               <li>
                 <span class="check-icon lite">✓</span>
                 <div>
-                  <strong>Audio &amp; Transcript History Inspector</strong>
-                  <span>Save local <code>.wav</code> recordings, play audio inline alongside transcripts to evaluate model accuracy, and delete recordings anytime</span>
+                  <strong>~35 MB Idle RAM &amp; Instant Auto-Unload</strong>
+                  <span>Ultra-compact memory footprint that unloads model weights when idle, freeing resources for your other apps</span>
+                </div>
+              </li>
+              <li>
+                <span class="check-icon lite">✓</span>
+                <div>
+                  <strong>NVIDIA Parakeet TDT 0.6B (Int8) Neural ASR</strong>
+                  <span>Sub-70ms offline speech-to-text transducer running on 2 CPU threads with AVX2 vector optimization (0.066x RTF)</span>
+                </div>
+              </li>
+              <li>
+                <span class="check-icon lite">✓</span>
+                <div>
+                  <strong>Audio &amp; Transcript Review Inspector</strong>
+                  <span>Save local <code>.wav</code> recordings, replay audio side-by-side with generated text to inspect accuracy, and delete recordings anytime</span>
                 </div>
               </li>
               <li>
                 <span class="check-icon lite">✓</span>
                 <div>
                   <strong>Dual-Mode Injection &amp; Floating CRT HUD</strong>
-                  <span>Clipboard-restore paste, Win32 SendInput fallback, and 7 retro-modern color themes</span>
-                </div>
-              </li>
-              <li>
-                <span class="check-icon lite">✓</span>
-                <div>
-                  <strong>Zero LLM Background Overhead</strong>
-                  <span>Streamlined interface with Pro AI Mode disabled out of the box for ultra-low memory consumption</span>
+                  <span>State-restored clipboard injection, Win32 SendInput Unicode fallback, and 7 retro-modern color themes</span>
                 </div>
               </li>
             </ul>
 
             <div class="edition-card-footer">
-              <a href="#download" class="opt-btn primary" data-select-edition="lite">
+              <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-setup.exe" class="opt-btn primary" data-select-edition="lite">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                Choose WhisperType Lite
+                Download WhisperType Lite (.exe)
               </a>
             </div>
           </article>
@@ -274,12 +334,15 @@
           <article class="edition-card edition-standard" data-edition-card="standard">
             <div class="edition-card-top">
               <div class="edition-badge-row">
-                <span class="edition-pill pro">WORKSTATION &amp; AI PC &bull; 8–16 GB+ RAM</span>
-                <span class="edition-footprint pro-glow">LM STUDIO READY</span>
+                <span class="edition-pill pro">HIGH-SPEC PCS &amp; WORKSTATIONS &bull; 8–16 GB+ RAM</span>
+                <span class="edition-footprint pro-glow">PRO AI MODE</span>
               </div>
-              <h3 class="edition-name">WhisperType <span class="pro-accent">Standard</span></h3>
+              <h3 class="edition-name" style="display: flex; align-items: center; gap: 0.75rem;">
+                <img src="/logo.png" alt="WhisperType Standard logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+                <span>WhisperType <span class="pro-accent">Standard</span></span>
+              </h3>
               <p class="edition-tagline">
-                The complete local AI dictation suite. Includes everything in Lite plus <strong>Pro AI Mode</strong> powered by local LM Studio models for instant Markdown structuring and grammar refinement.
+                The ultimate AI voice workstation. Includes the full offline ASR engine PLUS <strong>Pro AI Mode</strong> (<code>Ctrl+Win</code> / <code>Mouse4</code>) connected to local LLMs (via LM Studio / Llama 3 / Qwen) for speech backtracking, grammar fixing, and Markdown notes.
               </p>
             </div>
 
@@ -289,12 +352,12 @@
                 <span class="ed-metric-lbl">Normal + Pro AI</span>
               </div>
               <div class="ed-metric">
-                <span class="ed-metric-val">Local LLM</span>
-                <span class="ed-metric-lbl">127.0.0.1 Loopback</span>
+                <span class="ed-metric-val">Ctrl+Win/M4</span>
+                <span class="ed-metric-lbl">Pro Hotkeys</span>
               </div>
               <div class="ed-metric">
-                <span class="ed-metric-val">100%</span>
-                <span class="ed-metric-lbl">Air-Gapped Privacy</span>
+                <span class="ed-metric-val">127.0.0.1</span>
+                <span class="ed-metric-lbl">LM Studio Loopback</span>
               </div>
             </div>
 
@@ -302,37 +365,44 @@
               <li>
                 <span class="check-icon pro">✦</span>
                 <div>
-                  <strong>Everything in WhisperType Lite Included</strong>
-                  <span>Sub-70ms Parakeet-TDT engine, side-by-side Audio &amp; Transcript History player, and universal Win32 hotkey hook</span>
+                  <strong>Full Offline Parakeet ASR Engine Included</strong>
+                  <span>Everything in Lite: sub-70ms latency, side-by-side Audio &amp; Transcript History vault, and low-level Win32 keyboard hook</span>
                 </div>
               </li>
               <li>
                 <span class="check-icon pro">✦</span>
                 <div>
-                  <strong>Pro AI Mode (LM Studio Integration)</strong>
-                  <span>Transforms raw spoken thoughts into structured Markdown notes, bulleted action items, and polished prose via local LLMs</span>
+                  <strong>Pro AI Mode via <code>Ctrl+Win</code> or <code>Mouse4</code></strong>
+                  <span>Dedicated secondary voice hotkeys connected to local LLMs (Llama 3, Qwen 2.5, Mistral, DeepSeek) running in LM Studio on your GPU</span>
                 </div>
               </li>
               <li>
                 <span class="check-icon pro">✦</span>
                 <div>
-                  <strong>Custom System Prompts &amp; Model Selector</strong>
-                  <span>Tailor formatting instructions for Llama 3, Qwen 2.5, Mistral, or DeepSeek running locally on your GPU</span>
+                  <strong>Speech Backtracking &amp; Self-Correction</strong>
+                  <span>Detects verbal pivots (<em>"send it Friday—scratch that, make it Monday morning"</em>) and outputs the final intended meaning cleanly</span>
                 </div>
               </li>
               <li>
                 <span class="check-icon pro">✦</span>
                 <div>
-                  <strong>On-Demand Mode Switcher</strong>
-                  <span>Toggle between raw dictation and Pro AI structuring directly from the home bar or settings</span>
+                  <strong>Automatic Grammar Fixing &amp; Disfluency Removal</strong>
+                  <span>Eliminates vocal stutters and filler words (<em>"um"</em>, <em>"ah"</em>, <em>"like"</em>) and refines awkward phrasing into polished prose</span>
+                </div>
+              </li>
+              <li>
+                <span class="check-icon pro">✦</span>
+                <div>
+                  <strong>Structured Markdown Note-Making</strong>
+                  <span>Instantly transforms stream-of-consciousness brainstorming into structured bullet lists, action items, executive summaries, or code</span>
                 </div>
               </li>
             </ul>
 
             <div class="edition-card-footer">
-              <a href="#download" class="opt-btn pro-btn" data-select-edition="standard">
+              <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-setup.exe" class="opt-btn pro-btn" data-select-edition="standard">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
-                Choose WhisperType Standard
+                Download WhisperType Standard (.exe)
               </a>
             </div>
           </article>
@@ -424,13 +494,13 @@
             <div class="bento-card-icon">✨</div>
             <h3 class="bento-card-title">Local Pro AI Mode (Standard)</h3>
             <p class="bento-card-desc">
-              Connect to <strong>LM Studio</strong> on <code>http://localhost:1234/v1</code> to convert messy voice notes
-              into structured Markdown, task checklists, or clean documentation without cloud leakage.
+              Triggered via <code>Ctrl+Win</code> or <code>Mouse4</code>, WhisperType Standard connects to local LLMs (Llama 3, Qwen 2.5, Mistral) via LM Studio on <code>http://localhost:1234/v1</code> for speech backtracking/self-correction, grammar fixes, and Markdown note structuring.
             </p>
             <div class="feature-tags-list">
+              <span class="feature-tag-pill">Ctrl+Win / Mouse4</span>
+              <span class="feature-tag-pill">Speech Backtracking</span>
               <span class="feature-tag-pill">LM Studio Loopback</span>
-              <span class="feature-tag-pill">Custom Prompts</span>
-              <span class="feature-tag-pill">Local LLM Refinement</span>
+              <span class="feature-tag-pill">Structured Notes</span>
             </div>
           </div>
 
@@ -462,12 +532,12 @@
           <div class="download-header">
             <div class="app-meta-box">
               <div class="app-meta-icon">
-                <img src="/assets/icons/128x128.png" alt="WhisperType App Icon" width="56" height="56">
+                <img src="/logo-lite.png" id="appMetaIcon" alt="WhisperType App Icon" width="56" height="56" style="border-radius: 12px; display: block;">
               </div>
               <div class="app-meta-info">
                 <h3>WhisperType for Windows</h3>
                 <div class="app-meta-badge-row">
-                  <span class="badge-tag highlight" id="selectedEditionBadge">Standard + Lite Unified Binary</span>
+                  <span class="badge-tag highlight" id="selectedEditionBadge">Two Separated Editions Available</span>
                   <span class="badge-tag">v0.1.0 Stable</span>
                   <span class="badge-tag">x64 Architecture</span>
                   <span class="badge-tag">Windows 10 / 11</span>
@@ -497,47 +567,68 @@
           <!-- Dynamic Edition Banner -->
           <div class="edition-active-banner" id="editionActiveBanner">
             <div class="eab-left">
-              <span class="eab-tag" id="eabTag">WHISPERTYPE LITE PROFILE</span>
+              <span class="eab-tag" id="eabTag">WHISPERTYPE LITE PROFILE &bull; EVERYDAY PCS &amp; LAPTOPS</span>
               <p class="eab-desc" id="eabDesc">
-                Configured for pure, low-memory offline speech-to-text (~180 MB RAM) with inline Audio &amp; Transcript History playback. Runs effortlessly on any Windows 10/11 laptop or desktop without requiring a dedicated GPU or LM Studio.
+                Completely stripped of Local LLM / LM Studio and Pro Mode overhead so it runs effortlessly on any normal PC or laptop (~35 MB idle RAM, 2 CPU threads, pure NVIDIA Parakeet TDT 0.6B Int8 speech-to-text, instant auto-unload).
               </p>
             </div>
-            <div class="eab-spec-pill" id="eabSpec">Recommended: 4 GB+ RAM &bull; Any x64 CPU</div>
+            <div class="eab-spec-pill" id="eabSpec">Recommended: Any x64 CPU &bull; 4 GB+ RAM &bull; ~35 MB Idle</div>
           </div>
 
           <!-- 3-Tier Download Options -->
           <div class="download-options-grid">
-            <!-- Option 1: Installer EXE (Featured) -->
-            <div class="download-option-box featured" id="dlBoxExe">
-              <div class="opt-badge-featured" id="dlBadgeExe">RECOMMENDED &bull; LITE &amp; STANDARD</div>
-              <h4 class="opt-title" id="dlTitleExe">WhisperType Lite Installer (.exe)</h4>
-              <p class="opt-meta" id="dlMetaExe">Fast NSIS setup (~12 MB) with out-of-the-box offline dictation and Audio &amp; Transcript History viewer.</p>
-              <a href="https://github.com/DeepC0der/whispertype/releases/latest/download/WhisperType_0.1.0_x64-setup.exe" class="opt-btn primary" id="dlBtnExe">
+            <!-- Option 1: WhisperType Lite Installer (.exe) -->
+            <div class="download-option-box featured" id="dlBoxLite">
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem;">
+                <div class="opt-badge-featured" id="dlBadgeLite">FOR EVERYDAY PCS &amp; LAPTOPS</div>
+                <img src="/logo-lite.png" alt="WhisperType Lite logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+              </div>
+              <h4 class="opt-title" id="dlTitleLite">WhisperType Lite Installer (.exe)</h4>
+              <p class="opt-meta" id="dlMetaLite">Fast NSIS setup (~12 MB). ~35 MB idle RAM, 2 CPU threads, pure NVIDIA Parakeet TDT 0.6B Int8 ASR, and Audio &amp; Transcript Review player.</p>
+              <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-setup.exe" class="opt-btn primary" id="dlBtnLite">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span>Download Lite Installer (.exe)</span>
+                <span>Download WhisperType Lite (.exe)</span>
               </a>
+              <div class="opt-alt-formats">
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64_en-US.msi" title="Download Windows MSI installer">MSI Installer (.msi)</a>
+                <span>&bull;</span>
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-portable.zip" title="Download zero-install portable zip">Portable (.zip)</a>
+              </div>
             </div>
 
-            <!-- Option 2: MSI Package -->
-            <div class="download-option-box" id="dlBoxMsi">
-              <div class="opt-badge-sub" id="dlBadgeMsi">WINDOWS INSTALLER PACKAGE</div>
-              <h4 class="opt-title" id="dlTitleMsi">WhisperType Enterprise (.msi)</h4>
-              <p class="opt-meta" id="dlMetaMsi">Standard WiX MSI installer for workstation deployments, group policies, and silent installation.</p>
-              <a href="https://github.com/DeepC0der/whispertype/releases/latest/download/WhisperType_0.1.0_x64_en-US.msi" class="opt-btn secondary" id="dlBtnMsi">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span>Download MSI Package (.msi)</span>
+            <!-- Option 2: WhisperType Standard Installer (.exe) -->
+            <div class="download-option-box" id="dlBoxStandard">
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem;">
+                <div class="opt-badge-sub" id="dlBadgeStandard" style="color: #c084fc;">HIGH-SPEC PCS &amp; LOCAL LLMs</div>
+                <img src="/logo.png" alt="WhisperType Standard logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+              </div>
+              <h4 class="opt-title" id="dlTitleStandard">WhisperType Standard Installer (.exe)</h4>
+              <p class="opt-meta" id="dlMetaStandard">Full desktop installer with Parakeet ASR engine + Pro AI Mode (Ctrl+Win / Mouse4) with LM Studio (Llama 3 / Qwen) for speech backtracking and Markdown notes.</p>
+              <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-setup.exe" class="opt-btn pro-btn" id="dlBtnStandard">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+                <span>Download WhisperType Standard (.exe)</span>
               </a>
+              <div class="opt-alt-formats">
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64_en-US.msi" title="Download Windows MSI installer">MSI Installer (.msi)</a>
+                <span>&bull;</span>
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-portable.zip" title="Download zero-install portable zip">Portable (.zip)</a>
+              </div>
             </div>
 
             <!-- Option 3: Portable ZIP (Pre-bundled with Model) -->
             <div class="download-option-box" id="dlBoxZip">
-              <div class="opt-badge-sub" id="dlBadgeZip">ALL-IN-ONE WITH MODEL WEIGHTS</div>
-              <h4 class="opt-title" id="dlTitleZip">Portable All-in-One Bundle (.zip)</h4>
-              <p class="opt-meta" id="dlMetaZip">Zero-install archive pre-packaged with the Parakeet-TDT 0.6B Int8 speech model. Extract and run immediately.</p>
-              <a href="https://github.com/DeepC0der/whispertype/releases/latest/download/WhisperType-Portable.zip" class="opt-btn secondary" id="dlBtnZip">
+              <div class="opt-badge-sub" id="dlBadgeZip">ZERO-INSTALL PORTABLE</div>
+              <h4 class="opt-title" id="dlTitleZip">Portable Zero-Install Bundle (.zip)</h4>
+              <p class="opt-meta" id="dlMetaZip">Zero-install archive (~14–16 MB). Extract anywhere and run immediately with no registry modifications or admin rights.</p>
+              <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-portable.zip" class="opt-btn secondary" id="dlBtnZip">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span>Download All-in-One Portable (.zip)</span>
+                <span>Download Lite Portable (.zip)</span>
               </a>
+              <div class="opt-alt-formats">
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-portable.zip" id="dlStandardZipLink" title="Download Standard edition portable zip">Standard Portable (.zip)</a>
+                <span>&bull;</span>
+                <a href="https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/whispertype-lite.exe" id="dlRawExeLink" title="Download standalone raw executable">Standalone .exe</a>
+              </div>
             </div>
           </div>
 
@@ -574,11 +665,11 @@
           <div class="lm-studio-box" id="lmStudioGuideBox">
             <div class="lm-icon-wrap">✨</div>
             <div class="lm-content">
-              <h4>Unlocking WhisperType Standard (Pro AI Mode with LM Studio)</h4>
+              <h4>Unlocking WhisperType Standard (Pro AI Mode with Local LLMs)</h4>
               <p>
-                Want structured meeting summaries, bulleted lists, or automatic grammatical polish? In <strong>Settings &rarr; Text &amp; AI</strong>, enable <strong>Pro AI Mode</strong> and connect to any local LLM (e.g., Llama 3.2, Qwen 2.5, Mistral) running in
+                Want automated speech backtracking/self-correction, grammar fixes, and structured Markdown notes? Press <strong><kbd class="sim-kbd">Ctrl+Win</kbd></strong> or your secondary mouse button (<strong><kbd class="sim-kbd">Mouse4</kbd></strong>) in <strong>WhisperType Standard</strong>. It connects locally to
                 <a href="https://lmstudio.ai/" target="_blank" rel="noopener noreferrer" style="color: var(--status-refining); text-decoration: underline;">LM Studio</a>
-                on <code>http://localhost:1234/v1</code>. Strictly validated for localhost so zero voice or text ever leaves your machine.
+                on <code>http://localhost:1234/v1</code> running models like Llama 3.2, Qwen 2.5, or Mistral. Strictly validated for localhost loopback so zero voice or text ever leaves your machine.
               </p>
               <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                 <button type="button" class="btn-copy" data-copy-cmd="http://localhost:1234/v1">
@@ -605,40 +696,55 @@
             <thead>
               <tr>
                 <th>Component</th>
-                <th>WhisperType Lite (Everyday PC)</th>
-                <th>WhisperType Standard (Pro AI Mode)</th>
+                <th>WhisperType Lite (Everyday PC &amp; Laptop)</th>
+                <th>WhisperType Standard (Pro AI Workstation)</th>
               </tr>
             </thead>
             <tbody>
               <tr>
+                <td><strong>Target Machines</strong></td>
+                <td>Everyday Laptops, Office PCs, Ultrabooks (Intel Core i3/i5, AMD Ryzen 3/5)</td>
+                <td>High-Spec PCs, Dev Rigs &amp; Workstations with Local LLM capability</td>
+              </tr>
+              <tr>
                 <td><strong>Operating System</strong></td>
-                <td>Windows 10 64-bit (Build 19041+)</td>
+                <td>Windows 10 64-bit (Build 19041+) / Windows 11</td>
                 <td>Windows 10 / 11 64-bit</td>
               </tr>
               <tr>
+                <td><strong>Core Speech Engine</strong></td>
+                <td><strong>NVIDIA Parakeet TDT 0.6B Int8 ASR</strong> (Acoustic-to-Text Transducer)</td>
+                <td><strong>NVIDIA Parakeet TDT 0.6B Int8 ASR</strong> + Local LLM (Llama 3 / Qwen)</td>
+              </tr>
+              <tr>
+                <td><strong>Pro AI Mode Overhead</strong></td>
+                <td><strong>Completely stripped</strong> (0 LLM processes, 0 tokenizer overhead)</td>
+                <td><strong>Integrated</strong> (connects to LM Studio via loopback on demand)</td>
+              </tr>
+              <tr>
                 <td><strong>Processor (CPU)</strong></td>
-                <td>x86_64 CPU with AVX2 instruction set</td>
+                <td>x86_64 CPU with AVX2 (uses only <strong>2 CPU threads</strong>, minimal load)</td>
                 <td>Intel Core i5/i7 (10th Gen+) or AMD Ryzen 5/7 (4+ cores)</td>
               </tr>
               <tr>
                 <td><strong>System Memory (RAM)</strong></td>
-                <td>4 GB RAM (~180 MB WhisperType runtime footprint)</td>
-                <td>8 GB – 16 GB+ RAM (to host local LLM in LM Studio alongside ASR)</td>
+                <td>4 GB RAM (<strong>~35 MB idle RAM</strong>, instant auto-unload)</td>
+                <td>8 GB – 16 GB+ RAM (to host local LLM in LM Studio alongside Parakeet ASR)</td>
               </tr>
               <tr>
                 <td><strong>Graphics (GPU)</strong></td>
                 <td>Not required (runs at 0.066x RTF on CPU Int8)</td>
-                <td>Dedicated GPU (6 GB+ VRAM) or Apple/AMD/Intel NPU recommended for LM Studio</td>
+                <td>Dedicated GPU (6 GB+ VRAM) or NPU recommended for local LM Studio LLM</td>
               </tr>
               <tr>
-                <td><strong>Disk Storage</strong></td>
-                <td>650 MB free space (App + Parakeet Int8 model + WAV history)</td>
-                <td>650 MB for WhisperType + 2–5 GB for quantized GGUF model in LM Studio</td>
+                <td><strong>Global Hotkeys</strong></td>
+                <td><code>Ctrl+Shift+Space</code> (Hold-to-Talk or Toggle ASR)</td>
+                <td><code>Ctrl+Shift+Space</code> (ASR) + <code>Ctrl+Win</code> / <code>Mouse4</code> (Pro AI Mode)</td>
               </tr>
               <tr>
-                <td><strong>Core Capabilities</strong></td>
-                <td>Offline ASR, Dual-Mode Injection, Audio &amp; Transcript Review Player</td>
-                <td>All Lite features + Local LLM Markdown Structuring &amp; Custom Prompts</td>
+                <td><strong>Intelligent Capabilities</strong></td>
+                <td>Pure Voice-to-Text Dictation &amp; WAV Audio Review History</td>
+                <td>Speech Backtracking/Self-Correction, Grammar Polish &amp; Markdown Notes</td>
               </tr>
               <tr>
                 <td><strong>Network Egress</strong></td>
@@ -647,6 +753,142 @@
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Architecture & Frequently Asked Questions Section -->
+    <section class="faq-section" id="faq">
+      <div class="container">
+        <div class="section-head">
+          <span class="section-tag">UNDER THE HOOD &bull; DEEP DIVE</span>
+          <h2 class="section-title">Architecture &amp; Frequently Asked Questions</h2>
+          <p class="section-subtitle">
+            Understand how WhisperType's speech transducer works, why Parakeet TDT is an ASR model (not an LLM), and how the two editions differ.
+          </p>
+        </div>
+
+        <div class="faq-grid">
+          <!-- Architecture Card: ASR vs LLM -->
+          <div class="arch-card">
+            <div class="arch-card-header">
+              <div class="arch-badge">CORE ARCHITECTURE CLARIFICATION</div>
+              <h3>ASR Model vs. Large Language Model (LLM): Understanding the Difference</h3>
+            </div>
+            <div class="arch-card-body">
+              <div class="arch-flow-diagram">
+                <div class="arch-step">
+                  <span class="step-num">1</span>
+                  <div class="step-content">
+                    <strong>Acoustic Input</strong>
+                    <span>16 kHz Mono PCM Voice Stream</span>
+                  </div>
+                </div>
+                <div class="arch-arrow">&rarr;</div>
+                <div class="arch-step highlight-step">
+                  <span class="step-num">2</span>
+                  <div class="step-content">
+                    <strong>NVIDIA Parakeet TDT 0.6B Int8 (ASR)</strong>
+                    <span>Token-and-Duration Transducer &bull; Sub-70ms Acoustic Speech-to-Text</span>
+                  </div>
+                </div>
+                <div class="arch-arrow">&rarr;</div>
+                <div class="arch-step">
+                  <span class="step-num">3A</span>
+                  <div class="step-content">
+                    <strong>WhisperType Lite</strong>
+                    <span>Direct Active Window Text Injection &bull; ~35 MB Idle RAM</span>
+                  </div>
+                </div>
+                <div class="arch-branch-or">OR</div>
+                <div class="arch-step pro-step">
+                  <span class="step-num">3B</span>
+                  <div class="step-content">
+                    <strong>WhisperType Standard + Local LLM</strong>
+                    <span>LM Studio (Llama 3 / Qwen) &bull; Backtracking &amp; Markdown Notes</span>
+                  </div>
+                </div>
+              </div>
+
+              <p class="arch-explanation">
+                <strong>Crucial Architectural Distinction:</strong> <strong>NVIDIA Parakeet TDT 0.6B Int8</strong> is a specialized neural <strong>ASR (Automatic Speech Recognition)</strong> model, <em>not a Large Language Model (LLM)</em>. Its sole purpose is converting spoken acoustic waveforms directly into verbatim text at sub-70ms latency (0.066x RTF) without conversational drift or hallucination loops. Both <strong>WhisperType Lite</strong> and <strong>WhisperType Standard</strong> use this exact same lightweight neural ASR engine.
+                <br><br>
+                In <strong>WhisperType Standard</strong>, you can optionally pair the Parakeet ASR engine with a local <strong>LLM</strong> (such as Meta Llama 3 or Qwen 2.5 running in LM Studio) to perform intelligent Pro AI text transformation: automatic grammar fixing, natural speech backtracking/self-correction, and structured Markdown formatting.
+              </p>
+            </div>
+          </div>
+
+          <!-- FAQ Accordion -->
+          <div class="faq-accordion">
+            <details class="faq-item" open>
+              <summary class="faq-question">
+                <span>What are the key differences between WhisperType Lite and WhisperType Standard?</span>
+                <span class="faq-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="faq-answer">
+                <p>
+                  <strong>WhisperType Lite</strong> is engineered specifically for everyday laptops and standard PCs. It is completely stripped of Local LLM / LM Studio and Pro Mode overhead so it runs effortlessly with a near-zero background footprint: just <code>~35 MB idle RAM</code>, <code>2 CPU threads</code>, pure NVIDIA Parakeet TDT 0.6B Int8 neural speech-to-text, and instant auto-unload during pauses.
+                </p>
+                <p>
+                  <strong>WhisperType Standard</strong> is built for high-spec PCs and workstations capable of running local LLMs alongside speech recognition. It includes the full offline Parakeet ASR engine PLUS <strong>Pro AI Mode</strong> (triggered via <code>Ctrl+Win</code> or <code>Mouse4</code>) connected to local LLMs (via LM Studio / Llama 3 / Qwen) for speech backtracking/self-correction, grammar fixes, and Markdown note structuring.
+                </p>
+              </div>
+            </details>
+
+            <details class="faq-item">
+              <summary class="faq-question">
+                <span>Is NVIDIA Parakeet TDT an LLM?</span>
+                <span class="faq-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="faq-answer">
+                <p>
+                  <strong>No.</strong> NVIDIA Parakeet TDT 0.6B is a specialized neural <strong>Automatic Speech Recognition (ASR)</strong> transducer model, not a Large Language Model. It does not generate text from prompts or converse; its only job is converting voice audio into written words with sub-70ms latency.
+                </p>
+                <p>
+                  If you want AI rewriting, summarization, or note structuring, <strong>WhisperType Standard</strong> pairs the Parakeet ASR model with a local LLM (like Llama 3 or Qwen running offline in LM Studio) for Pro AI text transformation.
+                </p>
+              </div>
+            </details>
+
+            <details class="faq-item">
+              <summary class="faq-question">
+                <span>What is "Speech Backtracking and Self-Correction" in WhisperType Standard?</span>
+                <span class="faq-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="faq-answer">
+                <p>
+                  When dictating naturally, people frequently change their mind mid-sentence: for example, <em>"Send the report on Friday—wait, scratch that, make it Monday morning at 10am."</em>
+                </p>
+                <p>
+                  In <strong>WhisperType Standard</strong>'s Pro AI Mode (triggered via <code>Ctrl+Win</code> or <code>Mouse4</code>), the connected local LLM recognizes self-correction phrasing, drops the discarded statement, and injects the final intended text directly into your active window: <em>"Send the report on Monday morning at 10:00 AM."</em>
+                </p>
+              </div>
+            </details>
+
+            <details class="faq-item">
+              <summary class="faq-question">
+                <span>How does WhisperType guarantee 100% air-gapped privacy?</span>
+                <span class="faq-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="faq-answer">
+                <p>
+                  WhisperType operates with zero telemetry, zero analytics, zero external API keys, and zero cloud speech endpoints. When using WhisperType Standard's Pro AI Mode, requests are strictly routed to <code>http://127.0.0.1:1234/v1</code> on your local machine. Every voice audio sample and transcribed character remains strictly on your local device.
+                </p>
+              </div>
+            </details>
+
+            <details class="faq-item">
+              <summary class="faq-question">
+                <span>Can I run WhisperType Lite on a standard laptop without a dedicated GPU?</span>
+                <span class="faq-chevron" aria-hidden="true">▾</span>
+              </summary>
+              <div class="faq-answer">
+                <p>
+                  <strong>Yes, absolutely!</strong> WhisperType Lite is designed specifically for everyday laptops and PCs without dedicated GPUs. Its 8-bit quantized ONNX weights (<code>Int8</code>) execute via <code>sherpa-onnx</code> with AVX2 CPU acceleration, consuming only 2 CPU threads and ~35 MB idle RAM at an ultra-fast 0.066x Real-Time Factor.
+                </p>
+              </div>
+            </details>
+          </div>
         </div>
       </div>
     </section>
@@ -705,9 +947,11 @@
 
         <ul class="footer-links">
           <li><a href="#simulator">Simulator</a></li>
+          <li><a href="#editions">Lite vs. Standard</a></li>
           <li><a href="#features">Features</a></li>
           <li><a href="#download">Downloads</a></li>
-          <li><a href="https://github.com/DeepC0der/whispertype" target="_blank" rel="noopener noreferrer">GitHub</a></li>
+          <li><a href="#faq">Architecture &amp; FAQ</a></li>
+          <li><a href="https://github.com/DeepC0der/WhisperType" target="_blank" rel="noopener noreferrer">GitHub</a></li>
           <li><a href="https://github.com/k2-fsa/sherpa-onnx" target="_blank" rel="noopener noreferrer">Sherpa-ONNX</a></li>
           <li><a href="https://lmstudio.ai" target="_blank" rel="noopener noreferrer">LM Studio</a></li>
         </ul>

@@ -6,6 +6,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
   initThemeManager();
+  initMobileMenu();
   initEditionSwitcher();
   initSimulator();
   initCopyButtons();
@@ -22,6 +23,8 @@ function initEditionSwitcher() {
   const eabTag = document.getElementById('eabTag');
   const eabDesc = document.getElementById('eabDesc');
   const eabSpec = document.getElementById('eabSpec');
+  const dlBoxLite = document.getElementById('dlBoxLite');
+  const dlBoxStandard = document.getElementById('dlBoxStandard');
   const dlBadgeExe = document.getElementById('dlBadgeExe');
   const dlTitleExe = document.getElementById('dlTitleExe');
   const dlMetaExe = document.getElementById('dlMetaExe');
@@ -30,22 +33,34 @@ function initEditionSwitcher() {
 
   const EDITIONS = {
     lite: {
-      tag: 'WHISPERTYPE LITE PROFILE • ULTRA-LIGHTWEIGHT',
-      desc: 'Configured for pure, low-memory offline speech-to-text (~180 MB RAM) with inline Audio & Transcript History playback. Runs effortlessly on any Windows 10/11 laptop or desktop without requiring a dedicated GPU or LM Studio.',
-      spec: 'Recommended: 4 GB+ RAM • Any x64 CPU',
-      exeBadge: 'RECOMMENDED • EVERYDAY LAPTOPS & PCS',
+      tag: 'WHISPERTYPE LITE PROFILE • EVERYDAY PCS & LAPTOPS',
+      desc: 'Completely stripped of Local LLM / LM Studio and Pro Mode overhead so it runs effortlessly on any normal PC or laptop (~35 MB idle RAM, 2 CPU threads, pure NVIDIA Parakeet TDT 0.6B Int8 speech-to-text, instant auto-unload).',
+      spec: 'Recommended: Any x64 CPU • 4 GB+ RAM • 2 CPU Threads • ~35 MB Idle',
+      exeBadge: 'FOR EVERYDAY PCS & LAPTOPS',
       exeTitle: 'WhisperType Lite Installer (.exe)',
-      exeMeta: 'Fast NSIS setup (~12 MB) focused strictly on sub-70ms offline dictation and the Audio & Transcript History player.',
-      exeBtnText: 'Download WhisperType Lite (.exe)'
+      exeMeta: 'Ultra-lightweight NSIS setup (~12 MB). Pure sub-70ms ASR transcription, 2 CPU threads, ~35 MB idle RAM, and Audio & Transcript Review player.',
+      exeBtnText: 'Download WhisperType Lite (.exe)',
+      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-setup.exe',
+      zipTitle: 'Portable Zero-Install Bundle (.zip)',
+      zipMeta: 'Zero-install archive (~14 MB). Extract anywhere and run immediately with no registry modifications or admin rights.',
+      zipBtnText: 'Download Lite Portable (.zip)',
+      zipUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-portable.zip',
+      rawExeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/whispertype-lite.exe'
     },
     standard: {
-      tag: 'WHISPERTYPE STANDARD PROFILE • PRO AI MODE + LM STUDIO',
-      desc: 'Full workstation suite combining sub-70ms Parakeet-TDT speech recognition with Pro AI Mode (local LM Studio LLM integration) for instant Markdown notes, action items, and grammar refinement.',
-      spec: 'Recommended: 8–16 GB+ RAM • GPU for Local LLM',
-      exeBadge: 'RECOMMENDED • WORKSTATIONS & AI PCS',
+      tag: 'WHISPERTYPE STANDARD PROFILE • HIGH-SPEC PCS & WORKSTATIONS',
+      desc: 'Includes the full offline ASR engine PLUS Pro AI Mode (Ctrl+Win / Mouse4) connected to local LLMs (via LM Studio / Llama 3 / Qwen) for automatic grammar fixing, speech backtracking/self-correction, and structured Markdown note-making.',
+      spec: 'Recommended: 8–16 GB+ RAM • Dedicated GPU/NPU for Local LLM',
+      exeBadge: 'HIGH-SPEC PCS & LOCAL LLMs',
       exeTitle: 'WhisperType Standard Installer (.exe)',
-      exeMeta: 'Full desktop installer with Pro AI Mode (LM Studio 127.0.0.1 loopback integration) + Audio & Transcript History suite.',
-      exeBtnText: 'Download WhisperType Standard (.exe)'
+      exeMeta: 'Full desktop installer with offline Parakeet ASR + Pro AI Mode (Ctrl+Win / Mouse4, LM Studio loopback) + Audio & Transcript History vault.',
+      exeBtnText: 'Download WhisperType Standard (.exe)',
+      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-setup.exe',
+      zipTitle: 'WhisperType Standard Portable (.zip)',
+      zipMeta: 'Zero-install standalone package (~16 MB). Includes offline Parakeet ASR + Pro AI Mode runtime. Extract and run immediately.',
+      zipBtnText: 'Download Standard Portable (.zip)',
+      zipUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-portable.zip',
+      rawExeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/whispertype.exe'
     }
   };
 
@@ -63,22 +78,54 @@ function initEditionSwitcher() {
     if (eabTag) eabTag.textContent = cfg.tag;
     if (eabDesc) eabDesc.textContent = cfg.desc;
     if (eabSpec) eabSpec.textContent = cfg.spec;
+    if (dlBoxLite && dlBoxStandard) {
+      if (editionKey === 'standard') {
+        dlBoxStandard.classList.add('featured');
+        dlBoxLite.classList.remove('featured');
+      } else {
+        dlBoxLite.classList.add('featured');
+        dlBoxStandard.classList.remove('featured');
+      }
+    }
     if (dlBadgeExe) dlBadgeExe.textContent = cfg.exeBadge;
     if (dlTitleExe) dlTitleExe.textContent = cfg.exeTitle;
     if (dlMetaExe) dlMetaExe.textContent = cfg.exeMeta;
     if (dlBtnExe) {
       const span = dlBtnExe.querySelector('span');
       if (span) span.textContent = cfg.exeBtnText;
+      dlBtnExe.href = cfg.exeUrl;
+    }
+
+    // Update Portable ZIP Box dynamically according to selected edition
+    const dlTitleZip = document.getElementById('dlTitleZip');
+    const dlMetaZip = document.getElementById('dlMetaZip');
+    const dlBtnZip = document.getElementById('dlBtnZip');
+    const dlRawExeLink = document.getElementById('dlRawExeLink');
+    if (dlTitleZip) dlTitleZip.textContent = cfg.zipTitle;
+    if (dlMetaZip) dlMetaZip.textContent = cfg.zipMeta;
+    if (dlBtnZip) {
+      dlBtnZip.href = cfg.zipUrl;
+      const span = dlBtnZip.querySelector('span');
+      if (span) span.textContent = cfg.zipBtnText;
+    }
+    if (dlRawExeLink) {
+      dlRawExeLink.href = cfg.rawExeUrl;
     }
     if (lmGuideBox) {
       lmGuideBox.style.borderColor = editionKey === 'standard' ? 'var(--status-refining)' : 'var(--border)';
+    }
+
+    const appMetaIcon = document.getElementById('appMetaIcon') || document.querySelector('.app-meta-icon img');
+    if (appMetaIcon) {
+      appMetaIcon.src = editionKey === 'standard' ? '/logo.png' : '/logo-lite.png';
+      appMetaIcon.alt = editionKey === 'standard' ? 'WhisperType Standard logo' : 'WhisperType Lite logo';
     }
 
     if (notify) {
       showToast(
         editionKey === 'standard'
           ? 'Selected WhisperType Standard (with Pro AI Mode)'
-          : 'Selected WhisperType Lite (Lightweight ASR + Audio Review)'
+          : 'Selected WhisperType Lite (~35 MB Idle • Everyday PCs)'
       );
     }
   }
@@ -99,49 +146,157 @@ function initEditionSwitcher() {
 }
 
 /* ==========================================================================
-   1. Theme Management (Supporting 7 Desktop Themes & modern-web-guidance)
+   1. Theme Management (Matte Obsidian & Matte Parchment)
    ========================================================================== */
 const THEMES = {
-  dark: { name: 'Dark (Phosphor Green)', scheme: 'dark' },
-  amber: { name: 'Retro Amber CRT', scheme: 'dark' },
-  matrix: { name: 'Matrix Neon', scheme: 'dark' },
-  cyan: { name: 'Cyberpunk Cyan', scheme: 'dark' },
-  midnight: { name: 'Midnight Indigo', scheme: 'dark' },
-  light: { name: 'Clean Light', scheme: 'light' },
-  paper: { name: 'Warm Paper', scheme: 'light' }
+  dark: { name: 'Matte Obsidian (Dark)', scheme: 'dark' },
+  light: { name: 'Matte Parchment (Light)', scheme: 'light' }
 };
+
+function resolveTheme(raw) {
+  if (!raw) {
+    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
+      return 'light';
+    }
+    return 'dark';
+  }
+  const val = String(raw).toLowerCase().trim();
+  if (val === 'light' || val === 'paper') {
+    return 'light';
+  }
+  return 'dark'; // dark, amber, matrix, cyan, midnight, or legacy values
+}
 
 function initThemeManager() {
   const metaColorScheme = document.querySelector('meta[name="color-scheme"]');
-  const savedTheme = localStorage.getItem('whispertype_theme') || 'dark';
+  let currentTheme = 'dark';
+  try {
+    currentTheme = resolveTheme(localStorage.getItem('whispertype_theme'));
+  } catch (e) {
+    currentTheme = resolveTheme(null);
+  }
 
-  function setTheme(themeId) {
-    if (!THEMES[themeId]) themeId = 'dark';
-    document.documentElement.setAttribute('data-theme', themeId);
+  function setTheme(themeId, notify = false) {
+    const normalized = resolveTheme(themeId);
+    document.documentElement.setAttribute('data-theme', normalized);
     if (metaColorScheme) {
-      metaColorScheme.content = THEMES[themeId].scheme;
+      metaColorScheme.content = normalized;
     }
-    localStorage.setItem('whispertype_theme', themeId);
+    try {
+      localStorage.setItem('whispertype_theme', normalized);
+    } catch (e) {}
 
-    // Update active states on all theme pills & chips
+    // Update single header toggle button
+    const toggleBtn = document.getElementById('themeToggleBtn');
+    if (toggleBtn) {
+      const isLight = normalized === 'light';
+      toggleBtn.setAttribute('aria-pressed', isLight ? 'true' : 'false');
+      toggleBtn.setAttribute('aria-label', isLight ? 'Switch to dark mode' : 'Switch to light mode');
+      toggleBtn.setAttribute('title', isLight ? 'Switch to dark mode' : 'Switch to light mode');
+    }
+
+    // Update active states on simulator preview chips
     document.querySelectorAll('[data-set-theme]').forEach(btn => {
-      const isCurrent = btn.getAttribute('data-set-theme') === themeId;
+      const isCurrent = btn.getAttribute('data-set-theme') === normalized;
       btn.setAttribute('aria-pressed', isCurrent ? 'true' : 'false');
       btn.classList.toggle('active', isCurrent);
     });
+
+    if (notify) {
+      showToast(`Switched theme to ${THEMES[normalized]?.name || normalized}`);
+    }
   }
 
-  // Bind clicks on theme selectors
+  // Bind single toggle button
+  const toggleBtn = document.getElementById('themeToggleBtn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const current = document.documentElement.getAttribute('data-theme') || 'dark';
+      const nextTheme = current === 'light' ? 'dark' : 'light';
+      setTheme(nextTheme, true);
+    });
+  }
+
+  // Bind any preview chips
   document.querySelectorAll('[data-set-theme]').forEach(btn => {
     btn.addEventListener('click', () => {
       const targetTheme = btn.getAttribute('data-set-theme');
-      setTheme(targetTheme);
-      showToast(`Switched theme to ${THEMES[targetTheme]?.name || targetTheme}`);
+      setTheme(targetTheme, true);
     });
   });
 
-  // Apply initially
-  setTheme(savedTheme);
+  // Listen for OS prefers-color-scheme changes when user hasn't explicitly set in storage
+  if (window.matchMedia) {
+    const mql = window.matchMedia('(prefers-color-scheme: light)');
+    mql.addEventListener('change', e => {
+      try {
+        if (!localStorage.getItem('whispertype_theme')) {
+          setTheme(e.matches ? 'light' : 'dark', false);
+        }
+      } catch (err) {}
+    });
+  }
+
+  // Apply initially (ensuring migration is persisted)
+  setTheme(currentTheme, false);
+}
+
+/* ==========================================================================
+   1b. Mobile Navigation Drawer
+   ========================================================================== */
+function initMobileMenu() {
+  const navToggleBtn = document.getElementById('navToggleBtn');
+  const siteNav = document.getElementById('siteNav');
+  const siteHeader = document.querySelector('.site-header');
+
+  if (!navToggleBtn || !siteNav) return;
+
+  function openMenu() {
+    navToggleBtn.setAttribute('aria-expanded', 'true');
+    navToggleBtn.setAttribute('aria-label', 'Close navigation menu');
+    siteNav.classList.add('is-open');
+  }
+
+  function closeMenu() {
+    navToggleBtn.setAttribute('aria-expanded', 'false');
+    navToggleBtn.setAttribute('aria-label', 'Open navigation menu');
+    siteNav.classList.remove('is-open');
+  }
+
+  function toggleMenu() {
+    const isOpen = navToggleBtn.getAttribute('aria-expanded') === 'true';
+    if (isOpen) {
+      closeMenu();
+    } else {
+      openMenu();
+    }
+  }
+
+  navToggleBtn.addEventListener('click', toggleMenu);
+
+  // Close when clicking any nav link
+  siteNav.querySelectorAll('.nav-link').forEach(link => {
+    link.addEventListener('click', () => {
+      closeMenu();
+    });
+  });
+
+  // Close when Escape key pressed
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && navToggleBtn.getAttribute('aria-expanded') === 'true') {
+      closeMenu();
+      navToggleBtn.focus();
+    }
+  });
+
+  // Close when clicking outside header
+  document.addEventListener('click', e => {
+    if (navToggleBtn.getAttribute('aria-expanded') === 'true') {
+      if (siteHeader && !siteHeader.contains(e.target)) {
+        closeMenu();
+      }
+    }
+  });
 }
 
 /* ==========================================================================
@@ -188,9 +343,9 @@ function initSimulator() {
       pro: "### Summary\n- **Engine**: WhisperType (Local ASR)\n- **Model**: NVIDIA Parakeet TDT 0.6B Int8\n- **Platform**: Windows 10/11 (100% Air-Gapped)\n- **Status**: Verified sub-70ms transcription latency."
     },
     {
-      raw: "meeting notes new paragraph optimize inference pipeline comma verify AVX two vectorization comma and compile release installer period",
-      normal: "Meeting notes:\nOptimize inference pipeline, verify AVX2 vectorization, and compile release installer.",
-      pro: "## Action Items\n1. [x] Optimize Sherpa-ONNX inference pipeline\n2. [x] Validate AVX2 instruction execution\n3. [ ] Package NSIS & MSI release installers"
+      raw: "meeting notes scratch that action items for team comma optimize sherpa onnx pipeline comma check AVX two vectorization comma and release installers period",
+      normal: "Action items for team:\nOptimize sherpa-onnx pipeline, check AVX2 vectorization, and release installers.",
+      pro: "## Action Items (Auto-Backtracked)\n- [x] Optimize Sherpa-ONNX inference pipeline\n- [x] Validate AVX2 vector execution\n- [ ] Package NSIS & MSI release installers\n\n*Pro Mode automatically handled speech backtracking & self-correction.*"
     },
     {
       raw: "zero telemetry guarantee colon all voice packets remain entirely on local hardware with zero cloud egress period",
@@ -493,13 +648,22 @@ function initModals() {
       const manifestText = [
         "# WhisperType v0.1.0 Release SHA-256 Hashes",
         "# Generated for official x64 Windows binary distribution",
+        "# Air-Gapped Verification: 0 outbound connections, 100% local inference",
         "",
-        "SHA-256 (WhisperType_0.1.0_x64-setup.exe) = 8f94e4a938c5b058c4f74d0e8e916a2ef137bcde847f9a46b9a81f3dc25a071d",
-        "SHA-256 (WhisperType_0.1.0_x64_en-US.msi) = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "SHA-256 (WhisperType-Portable.zip)      = a56c71048b111db4c75f190e4f21db5ec4a02bb40dcf99371e7d825f778a4623",
-        "SHA-256 (sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2) = f9432d6c95357904325a666993cbfb36f784e1b9b1b1178229b9f957eb62c208",
+        "# WhisperType Standard Edition (with Pro AI Mode)",
+        "076dd98885c97360df983417c749b22d456a1a711621d549e3d701adb2c4b9da *WhisperType_0.1.0_x64-setup.exe",
+        "37ec1659a482fda57af219fc08e73a7fb2a0da5d45b18ab2c548848e15e089e5 *WhisperType_0.1.0_x64_en-US.msi",
+        "cef1796c9fa18068f4646aabfa157ef7e40d7ea6964407f7b66ac3aba6a3709d *WhisperType_0.1.0_x64-portable.zip",
+        "58c9511b5719ccae3b860dc1cae35cd6f4b193be408bd50c8c1ac5749c7113dc *whispertype.exe",
         "",
-        "# Air-Gapped Verification: 0 outbound connections, 100% local inference"
+        "# WhisperType Lite Edition (~35 MB Idle • Everyday PCs)",
+        "085143700cad307f19a675124efa4e98c6cc98a9e2e013b24f28e92fa67e4cc9 *WhisperType.Lite_0.1.0_x64-setup.exe",
+        "25a38365642f85f5c2bdbcd26f0065bb38d71401479d80d5c43d449302930d3b *WhisperType.Lite_0.1.0_x64_en-US.msi",
+        "ebdf4bca8d65532a1f37a76886674c3f79e808cb91d625d3d5fd524fbdcf1779 *WhisperType.Lite_0.1.0_x64-portable.zip",
+        "2b6577e28c95b56c6d956be434f99977ac9e1de1dea3dbc3c439922793f8a3e4 *whispertype-lite.exe",
+        "",
+        "# Official Speech Model",
+        "f9432d6c95357904325a666993cbfb36f784e1b9b1b1178229b9f957eb62c208 *sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
       ].join("\n");
 
       const blob = new Blob([manifestText], { type: 'text/plain;charset=utf-8' });

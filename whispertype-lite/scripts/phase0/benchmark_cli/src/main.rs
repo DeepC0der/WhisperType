@@ -314,8 +314,15 @@ fn dirs_appdata() -> PathBuf {
             .join("Murmur")
             .join("models")
             .join("parakeet-tdt-int8")
+    } else if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        PathBuf::from(userprofile)
+            .join("AppData")
+            .join("Roaming")
+            .join("Murmur")
+            .join("models")
+            .join("parakeet-tdt-int8")
     } else {
-        PathBuf::from(PathBuf::from("models").join("parakeet-tdt-int8"))
+        PathBuf::from("models").join("parakeet-tdt-int8")
     }
 }
 
