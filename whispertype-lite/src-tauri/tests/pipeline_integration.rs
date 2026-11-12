@@ -1,10 +1,10 @@
-use murmur_lib::asr::{AsrEngine, PostProcessConfig};
-use murmur_lib::audio::resample_and_normalize;
-use murmur_lib::platform::windows::{
+use whispertype_lite_lib::asr::{AsrEngine, PostProcessConfig};
+use whispertype_lite_lib::audio::resample_and_normalize;
+use whispertype_lite_lib::platform::windows::{
     calculate_overlay_position, HotkeyAction, HotkeyModeController,
 };
-use murmur_lib::state::{AppState, AppStateManager};
-use murmur_lib::storage::{Database, HotkeyMode, NewHistoryRecord};
+use whispertype_lite_lib::state::{AppState, AppStateManager};
+use whispertype_lite_lib::storage::{Database, HotkeyMode, NewHistoryRecord};
 use windows::Win32::Foundation::RECT;
 
 #[test]
@@ -247,7 +247,7 @@ fn test_overlay_position_multi_monitor_and_dpi() {
 
 #[test]
 fn test_bounded_recording_gain_and_clipping() {
-    use murmur_lib::audio::apply_audio_gain;
+    use whispertype_lite_lib::audio::apply_audio_gain;
 
     let mut samples = vec![-0.8, -0.5, 0.0, 0.5, 0.8];
     // 200% gain -> -1.6, -1.0, 0.0, 1.0, 1.6 -> clamped to [-1.0, 1.0]
@@ -262,7 +262,7 @@ fn test_bounded_recording_gain_and_clipping() {
 
 #[test]
 fn test_settings_wiring_and_privacy_defaults() {
-    use murmur_lib::storage::AppSettings;
+    use whispertype_lite_lib::storage::AppSettings;
 
     let settings = AppSettings::default();
 
@@ -278,7 +278,7 @@ fn test_settings_wiring_and_privacy_defaults() {
 
 #[test]
 fn test_model_provisioning_and_validation() {
-    use murmur_lib::asr::{inspect_model_directory, REQUIRED_MODEL_FILES};
+    use whispertype_lite_lib::asr::{inspect_model_directory, REQUIRED_MODEL_FILES};
     use std::fs;
 
     let temp_dir = std::env::temp_dir().join(format!("murmur_model_test_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
@@ -303,7 +303,7 @@ fn test_model_provisioning_and_validation() {
 
 #[test]
 fn test_dictation_controller_stale_session_prevention() {
-    use murmur_lib::dictation::DictationController;
+    use whispertype_lite_lib::dictation::DictationController;
 
     let controller = DictationController::new();
     assert!(controller.get_session_snapshot().is_none());

@@ -257,9 +257,10 @@ const MainLayout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
 
 export const App: React.FC = () => {
   React.useEffect(() => {
-    // Initial fetch of settings and history
+    // Initial fetch of settings, history, and model status
     useAppStore.getState().fetchSettings();
     useAppStore.getState().fetchHistory();
+    useAppStore.getState().fetchModelStatus();
 
     let unlistenAll: (() => void) | null = null;
 
@@ -307,6 +308,9 @@ export const App: React.FC = () => {
           const unlistenMode = listen<"normal" | "professional">("dictation-mode-changed", (event) => {
             useAppStore.getState().setActiveDictationMode(event.payload);
           });
+          const unlistenModelStatus = listen("model-status-changed", () => {
+            useAppStore.getState().fetchModelStatus();
+          });
 
           unlistenAll = () => {
             unlistenMic.then((fn) => fn()).catch(() => {});
@@ -316,6 +320,7 @@ export const App: React.FC = () => {
             unlistenProfessional.then((fn) => fn()).catch(() => {});
             unlistenProfError.then((fn) => fn()).catch(() => {});
             unlistenMode.then((fn) => fn()).catch(() => {});
+            unlistenModelStatus.then((fn) => fn()).catch(() => {});
           };
         })
         .catch(() => {});

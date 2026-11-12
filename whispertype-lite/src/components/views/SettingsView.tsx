@@ -59,6 +59,18 @@ export const SettingsView: React.FC = () => {
     fetchRecordings();
   }, [fetchSettings, fetchAudioDevices, fetchModelStatus, fetchRecordings]);
 
+  // Polling fallback while model is loading
+  useEffect(() => {
+    const isLoading = Boolean(modelStatus?.is_loading || modelStatus?.status?.status === "loading");
+    if (!isLoading) return;
+
+    const interval = setInterval(() => {
+      fetchModelStatus();
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [modelStatus?.is_loading, modelStatus?.status?.status, fetchModelStatus]);
+
   // Live hotkey recording listener
   useEffect(() => {
     if (!isCapturingHotkey) return;

@@ -914,14 +914,13 @@ pub fn run() {
     // 4. Audio capture buffer (allocated only during active recording)
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
 
-    // 5. Initialize ASR engine and spawn background loading
+    // 5. Initialize ASR engine
     let initial_settings = settings_manager.get();
     let asr_engine = AsrEngine::new_with_threads(
         &initial_settings.performance_provider,
         initial_settings.idle_unload_minutes,
         initial_settings.thread_count,
     );
-    asr_engine.spawn_background_load();
 
     tauri::Builder::default()
         .on_window_event(|window, event| {
@@ -1036,6 +1035,10 @@ pub fn run() {
 
             // Preload audio cues for sub-millisecond initial playback
             crate::sound::preload_audio_cues(app.handle());
+
+            // Spawn background model load with app handle so model-status-changed events are emitted
+            let engine = app.state::<AsrEngine>().inner().clone();
+            engine.spawn_background_load_with_app(app.handle().clone());
 
             Ok(())
         })

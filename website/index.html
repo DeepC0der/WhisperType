@@ -111,7 +111,7 @@
         <div class="hero-cta-group">
           <a href="https://github.com/DeepC0der/WhisperType/releases/latest" class="hero-edition-btn hero-lite-btn" title="Download WhisperType Lite for everyday laptops and PCs">
             <div class="hero-btn-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <img src="/logo-lite.png" alt="WhisperType Lite logo" width="28" height="28" style="border-radius: 6px; display: block;" />
             </div>
             <div class="hero-btn-body">
               <div class="hero-btn-heading">
@@ -124,7 +124,7 @@
 
           <a href="https://github.com/DeepC0der/WhisperType/releases/latest" class="hero-edition-btn hero-standard-btn" title="Download WhisperType Standard for workstations and local LLMs">
             <div class="hero-btn-icon">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m12 3-1.9 5.8a2 2 0 0 1-1.3 1.3L3 12l5.8 1.9a2 2 0 0 1 1.3 1.3L12 21l1.9-5.8a2 2 0 0 1 1.3-1.3L21 12l-5.8-1.9a2 2 0 0 1-1.3-1.3Z"/></svg>
+              <img src="/logo.png" alt="WhisperType Standard logo" width="28" height="28" style="border-radius: 6px; display: block;" />
             </div>
             <div class="hero-btn-body">
               <div class="hero-btn-heading">
@@ -238,7 +238,10 @@
                 <span class="edition-pill lite">EVERYDAY PCS &amp; LAPTOPS &bull; 4 GB+ RAM</span>
                 <span class="edition-footprint">~35 MB IDLE RAM</span>
               </div>
-              <h3 class="edition-name">WhisperType <span class="lite-accent">Lite</span></h3>
+              <h3 class="edition-name" style="display: flex; align-items: center; gap: 0.75rem;">
+                <img src="/logo-lite.png" alt="WhisperType Lite logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+                <span>WhisperType <span class="lite-accent">Lite</span></span>
+              </h3>
               <p class="edition-tagline">
                 Completely stripped of Local LLM / LM Studio and Pro Mode overhead so it runs effortlessly on any normal PC or laptop. Pure NVIDIA Parakeet TDT 0.6B Int8 speech-to-text with instant auto-unload.
               </p>
@@ -312,7 +315,10 @@
                 <span class="edition-pill pro">HIGH-SPEC PCS &amp; WORKSTATIONS &bull; 8–16 GB+ RAM</span>
                 <span class="edition-footprint pro-glow">PRO AI MODE</span>
               </div>
-              <h3 class="edition-name">WhisperType <span class="pro-accent">Standard</span></h3>
+              <h3 class="edition-name" style="display: flex; align-items: center; gap: 0.75rem;">
+                <img src="/logo.png" alt="WhisperType Standard logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+                <span>WhisperType <span class="pro-accent">Standard</span></span>
+              </h3>
               <p class="edition-tagline">
                 The ultimate AI voice workstation. Includes the full offline ASR engine PLUS <strong>Pro AI Mode</strong> (<code>Ctrl+Win</code> / <code>Mouse4</code>) connected to local LLMs (via LM Studio / Llama 3 / Qwen) for speech backtracking, grammar fixing, and Markdown notes.
               </p>
@@ -504,7 +510,7 @@
           <div class="download-header">
             <div class="app-meta-box">
               <div class="app-meta-icon">
-                <img src="/assets/icons/128x128.png" alt="WhisperType App Icon" width="56" height="56">
+                <img src="/logo-lite.png" id="appMetaIcon" alt="WhisperType App Icon" width="56" height="56" style="border-radius: 12px; display: block;">
               </div>
               <div class="app-meta-info">
                 <h3>WhisperType for Windows</h3>
@@ -551,7 +557,10 @@
           <div class="download-options-grid">
             <!-- Option 1: WhisperType Lite Installer (.exe) -->
             <div class="download-option-box featured" id="dlBoxLite">
-              <div class="opt-badge-featured" id="dlBadgeLite">FOR EVERYDAY PCS &amp; LAPTOPS</div>
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem;">
+                <div class="opt-badge-featured" id="dlBadgeLite">FOR EVERYDAY PCS &amp; LAPTOPS</div>
+                <img src="/logo-lite.png" alt="WhisperType Lite logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+              </div>
               <h4 class="opt-title" id="dlTitleLite">WhisperType Lite Installer (.exe)</h4>
               <p class="opt-meta" id="dlMetaLite">Fast NSIS setup (~12 MB). ~35 MB idle RAM, 2 CPU threads, pure NVIDIA Parakeet TDT 0.6B Int8 ASR, and Audio &amp; Transcript Review player.</p>
               <a href="https://github.com/DeepC0der/WhisperType/releases/latest" class="opt-btn primary" id="dlBtnLite">
@@ -562,7 +571,10 @@
 
             <!-- Option 2: WhisperType Standard Installer (.exe) -->
             <div class="download-option-box" id="dlBoxStandard">
-              <div class="opt-badge-sub" id="dlBadgeStandard" style="color: #c084fc;">HIGH-SPEC PCS &amp; LOCAL LLMs</div>
+              <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.5rem;">
+                <div class="opt-badge-sub" id="dlBadgeStandard" style="color: #c084fc;">HIGH-SPEC PCS &amp; LOCAL LLMs</div>
+                <img src="/logo.png" alt="WhisperType Standard logo" width="36" height="36" style="border-radius: 9px; flex-shrink: 0;" />
+              </div>
               <h4 class="opt-title" id="dlTitleStandard">WhisperType Standard Installer (.exe)</h4>
               <p class="opt-meta" id="dlMetaStandard">Full desktop installer with Parakeet ASR engine + Pro AI Mode (Ctrl+Win / Mouse4) with LM Studio (Llama 3 / Qwen) for speech backtracking and Markdown notes.</p>
               <a href="https://github.com/DeepC0der/WhisperType/releases/latest" class="opt-btn pro-btn" id="dlBtnStandard">

@@ -541,15 +541,17 @@ export const useAppStore = create<AppStore>((set, get) => ({
   fetchModelStatus: async () => {
     try {
       const raw = await invokeTauri<any>("get_model_status");
-      const is_ready = raw?.status?.status === "ready";
-      const is_loading = raw?.status?.status === "loading";
+      const is_ready = Boolean(raw?.is_loaded || raw?.status?.status === "ready");
+      const is_loading = Boolean(raw?.is_loading || raw?.status?.status === "loading");
       const last_error =
-        raw?.status?.status === "error" ? raw.status.message || "Model load error" : null;
+        raw?.status?.status === "error"
+          ? raw.status.message || "Model load error"
+          : (raw?.last_error ?? null);
       const status: ModelStatus = {
         ...raw,
         is_loaded: is_ready,
         is_loading: is_loading,
-        provider: raw.active_provider || "cpu",
+        provider: raw?.active_provider || raw?.provider || "cpu",
         last_error,
       };
       set({ modelStatus: status });

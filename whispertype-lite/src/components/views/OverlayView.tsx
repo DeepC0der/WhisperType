@@ -17,12 +17,17 @@ export const OverlayView: React.FC = () => {
   const [isDimmed, setIsDimmed] = useState(false);
   const [prefersReducedMotion, setPrefersReducedMotion] = useState(false);
   const lastSpeechTimeRef = useRef<number>(Date.now());
+  const micLevelRef = useRef(0);
   const animLevelRef = useRef(0);
   const phaseRef = useRef(0);
   const [displayLevel, setDisplayLevel] = useState(0);
   const [animPhase, setAnimPhase] = useState(0);
   const rafRef = useRef<number>(0);
   const lastSetRef = useRef<number>(0);
+
+  useEffect(() => {
+    micLevelRef.current = micLevel;
+  }, [micLevel]);
 
   // Fetch initial settings & snapshot, and listen to Tauri events on mount
   useEffect(() => {
@@ -114,15 +119,19 @@ export const OverlayView: React.FC = () => {
     }
     lastSetRef.current = Date.now();
     const animate = () => {
-      // Perceptual square-root scale: sensitive to whispering & conversational speech, resting below 1.5 noise floor
-      const noiseFloor = 1.5;
+      // Perceptual square-root scale: sensitive to whispering & conversational speech, resting below 2.0 noise floor
+      const noiseFloor = 2.0;
+      const currentMic = micLevelRef.current;
       const targetRaw =
-        micLevel > noiseFloor
-          ? Math.min(1, Math.sqrt((micLevel - noiseFloor) / 85.0))
+        currentMic > noiseFloor
+          ? Math.min(1, Math.sqrt((currentMic - noiseFloor) / 55.0))
           : 0;
-      // Exponential moving average: fast attack (0.45), smooth release (0.15)
-      const attack = targetRaw > animLevelRef.current ? 0.45 : 0.15;
+      // Exponential moving average: fast attack (0.42), smooth release (0.18)
+      const attack = targetRaw > animLevelRef.current ? 0.42 : 0.18;
       animLevelRef.current = animLevelRef.current * (1 - attack) + targetRaw * attack;
+      if (animLevelRef.current < 0.005 && targetRaw === 0) {
+        animLevelRef.current = 0;
+      }
 
       // Throttle React state updates to ~30fps max
       const now = Date.now();
@@ -138,7 +147,7 @@ export const OverlayView: React.FC = () => {
     };
     rafRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafRef.current);
-  }, [appState, micLevel]);
+  }, [appState]);
 
   // Dedicated recording timer (only ticks during RECORDING, independent of mic events)
   useEffect(() => {
@@ -181,8 +190,8 @@ export const OverlayView: React.FC = () => {
   useEffect(() => {
     if (appState !== "RECORDING") return;
 
-    // micLevel is 0.0 - 100.0 from WASAPI RMS; speech is detected above lowered noise floor 1.5
-    const isSpeaking = micLevel > 1.5;
+    // micLevel is 0.0 - 100.0 from WASAPI RMS; speech is detected above lowered noise floor 2.0
+    const isSpeaking = micLevel > 2.0;
     if (isSpeaking) {
       lastSpeechTimeRef.current = Date.now();
       if (settings.brighten_on_speech) {
@@ -332,36 +341,26 @@ export const OverlayView: React.FC = () => {
             }`}
           >
             {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => {
-              const restingHeights = [5, 7, 10, 13, 15, 13, 10, 7, 5];
+              const minDotPx = isDimmed ? 3 : 4;
               let heightPx: number;
 
-              if (displayLevel > 0.02) {
+              if (displayLevel > 0.015) {
                 // Symmetric center-weighted envelope (1.0 at center, tapering smoothly to ~0.45 at edges)
                 const distFromCenter = Math.abs(i - 4);
-                const envelope = 1 - (distFromCenter / 4) * 0.55;
+                const envelope = 1 - (distFromCenter / 4) * 0.55; // 1.0 center -> 0.45 edge
                 // Organic per-bar sine wave modulation using the smooth animation phase
-                const wave = 0.65 + 0.35 * Math.sin(i * 0.9 + animPhase);
-                const dynamicH = 6 + 16 * Math.min(1, displayLevel * 1.2) * envelope * wave;
-                // Smooth transition blend from resting silhouette into active speech visualizer
-                const blend = Math.min(1, (displayLevel - 0.02) / 0.12);
-                const restingH = isDimmed
-                  ? Math.max(3, Math.round(restingHeights[i] * 0.65))
-                  : restingHeights[i];
-                heightPx = (1 - blend) * restingH + blend * dynamicH;
-                if (isDimmed) {
-                  heightPx = Math.max(4, heightPx * 0.65);
-                }
+                const wave = prefersReducedMotion ? 1.0 : 0.65 + 0.35 * Math.sin(i * 0.9 + animPhase);
+                const maxExtraPx = isDimmed ? 10 : 18;
+                heightPx = minDotPx + maxExtraPx * Math.min(1, displayLevel) * envelope * wave;
               } else {
-                // Subtle varied resting wave silhouette when silent
-                heightPx = isDimmed
-                  ? Math.max(3, Math.round(restingHeights[i] * 0.65))
-                  : restingHeights[i];
+                // Flat uniform dot-dot-dot minimum baseline when silent
+                heightPx = minDotPx;
               }
 
               return (
                 <div
                   key={i}
-                  className="w-[3px] rounded-full transition-[height] duration-75 ease-out shrink-0"
+                  className={`${isDimmed ? "w-[3px]" : "w-[4px]"} rounded-full transition-[height] duration-75 ease-out shrink-0 motion-reduce:transition-none`}
                   style={{
                     height: `${Math.round(heightPx)}px`,
                     backgroundColor: "hsl(var(--primary))",

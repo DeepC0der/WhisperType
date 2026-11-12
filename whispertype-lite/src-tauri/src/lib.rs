@@ -15,9 +15,10 @@ use dictation::{DictationController, DictationMode};
 use platform::{Autostart, HotkeyBackend, OverlayWindowExt, TextInjector};
 use state::{AppState, AppStateManager, StateSnapshot};
 use storage::{
-    get_default_db_path, get_default_settings_path, AppSettings, Database, DictionaryRecord,
-    HistoryRecord, InsertionMode, NewDictionaryEntry, SettingsManager,
+    atomic_write_json, get_default_db_path, get_default_settings_path, AppSettings, Database,
+    DictionaryRecord, HistoryRecord, InsertionMode, NewDictionaryEntry, SettingsManager,
 };
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -333,12 +334,15 @@ fn get_settings(settings: State<'_, SettingsManager>) -> Result<AppSettings, Str
 
 #[tauri::command]
 fn update_settings(
-    new_settings: AppSettings,
+    mut new_settings: AppSettings,
     settings: State<'_, SettingsManager>,
     hotkey_service: State<'_, HotkeyService>,
     asr_engine: State<'_, AsrEngine>,
     app: AppHandle,
 ) -> Result<(), String> {
+    // WhisperType Lite is strictly CPU Int8
+    new_settings.performance_provider = "cpu".to_string();
+    new_settings.professional_mode_enabled = false;
     let old_settings = settings.get();
     let settings_path = get_default_settings_path();
 
@@ -346,7 +350,7 @@ fn update_settings(
         .update_and_save(&settings_path, new_settings.clone())
         .map_err(|e| e.to_string())?;
 
-    let need_reload_provider = asr_engine.set_requested_provider(&new_settings.performance_provider).unwrap_or(false);
+    let need_reload_provider = asr_engine.set_requested_provider("cpu").unwrap_or(false);
     let need_reload_threads = asr_engine.set_thread_count(new_settings.thread_count).unwrap_or(false);
     asr_engine.set_idle_unload_minutes(new_settings.idle_unload_minutes);
 
@@ -354,6 +358,7 @@ fn update_settings(
         let engine_clone = (*asr_engine).clone();
         let app_clone = app.clone();
         std::thread::spawn(move || {
+            let _ = app_clone.emit("model-status-changed", engine_clone.get_status());
             if let Err(e) = engine_clone.load_model() {
                 log::warn!("Asynchronous model reload after settings update failed: {e}");
             }
@@ -749,6 +754,25 @@ pub fn run() {
 
     // 2. Initialize settings
     let settings_path = get_default_settings_path();
+    if !settings_path.exists() {
+        let standard_settings_path = if let Ok(appdata) = std::env::var("APPDATA") {
+            PathBuf::from(appdata).join("Murmur").join("settings.json")
+        } else if let Some(proj_dirs) = directories::ProjectDirs::from("com", "murmur", "Murmur") {
+            proj_dirs.config_dir().join("settings.json")
+        } else {
+            PathBuf::from("settings.json")
+        };
+
+        if standard_settings_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&standard_settings_path) {
+                if let Ok(mut settings) = serde_json::from_str::<AppSettings>(&content) {
+                    settings.performance_provider = "cpu".to_string();
+                    settings.professional_mode_enabled = false;
+                    let _ = atomic_write_json(&settings_path, &settings);
+                }
+            }
+        }
+    }
     let settings_manager = SettingsManager::load_from_file(&settings_path).unwrap_or_else(|e| {
         log::error!("Failed to load settings from file: {e}. Using defaults.");
         SettingsManager::default()
@@ -764,14 +788,18 @@ pub fn run() {
     // 4. Audio capture buffer (allocated only during active recording)
     let audio_capture = Arc::new(Mutex::new(AudioCapture::new()));
 
-    // 5. Initialize ASR engine and spawn background loading
-    let initial_settings = settings_manager.get();
+    // 5. Initialize ASR engine (WhisperType Lite strictly enforces CPU Int8)
+    let mut initial_settings = settings_manager.get();
+    if initial_settings.performance_provider != "cpu" || initial_settings.professional_mode_enabled {
+        initial_settings.performance_provider = "cpu".to_string();
+        initial_settings.professional_mode_enabled = false;
+        let _ = settings_manager.update_and_save(&settings_path, initial_settings.clone());
+    }
     let asr_engine = AsrEngine::new_with_threads(
-        &initial_settings.performance_provider,
+        "cpu",
         initial_settings.idle_unload_minutes,
         initial_settings.thread_count,
     );
-    asr_engine.spawn_background_load();
 
     tauri::Builder::default()
         .on_window_event(|window, event| {
@@ -881,6 +909,10 @@ pub fn run() {
 
             // Preload audio cues for sub-millisecond initial playback
             crate::sound::preload_audio_cues(app.handle());
+
+            // Spawn background model load with app handle so model-status-changed events are emitted
+            let engine = app.state::<AsrEngine>().inner().clone();
+            engine.spawn_background_load_with_app(app.handle().clone());
 
             Ok(())
         })

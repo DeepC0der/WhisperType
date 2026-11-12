@@ -34,7 +34,7 @@ pub fn init_logging(
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
 
     let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,murmur=debug,murmur_lib=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("info,murmur=debug,whispertype_lite=debug,whispertype_lite_lib=debug"));
 
     let file_layer = fmt::layer()
         .with_writer(non_blocking_file)

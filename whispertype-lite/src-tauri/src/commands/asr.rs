@@ -14,8 +14,12 @@ pub fn get_model_status(engine: State<'_, AsrEngine>) -> Result<ModelStatus, Str
 }
 
 #[tauri::command]
-pub fn load_model(engine: State<'_, AsrEngine>) -> Result<(), String> {
-    engine.load_model().map_err(|e| e.to_string())
+pub fn load_model(engine: State<'_, AsrEngine>, app: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Emitter;
+    let _ = app.emit("model-status-changed", engine.get_status());
+    let res = engine.load_model().map_err(|e| e.to_string());
+    let _ = app.emit("model-status-changed", engine.get_status());
+    res
 }
 
 #[tauri::command]
@@ -27,9 +31,10 @@ pub fn validate_model_path(path: String) -> Result<ModelValidationResult, String
 pub fn import_local_model(
     source_folder: String,
     engine: State<'_, AsrEngine>,
+    app: tauri::AppHandle,
 ) -> Result<String, String> {
     let target = import_model_from_folder(Path::new(&source_folder))?;
-    engine.spawn_background_load();
+    engine.spawn_background_load_with_app(app);
     Ok(target.to_string_lossy().to_string())
 }
 

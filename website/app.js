@@ -88,6 +88,12 @@ function initEditionSwitcher() {
       lmGuideBox.style.borderColor = editionKey === 'standard' ? 'var(--status-refining)' : 'var(--border)';
     }
 
+    const appMetaIcon = document.getElementById('appMetaIcon') || document.querySelector('.app-meta-icon img');
+    if (appMetaIcon) {
+      appMetaIcon.src = editionKey === 'standard' ? '/logo.png' : '/logo-lite.png';
+      appMetaIcon.alt = editionKey === 'standard' ? 'WhisperType Standard logo' : 'WhisperType Lite logo';
+    }
+
     if (notify) {
       showToast(
         editionKey === 'standard'

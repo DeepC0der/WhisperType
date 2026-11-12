@@ -445,14 +445,14 @@ pub fn atomic_write_json<T: Serialize>(path: &Path, data: &T) -> Result<(), Sett
     Ok(())
 }
 
-/// Locate standard settings path under %APPDATA%\Murmur\settings.json.
+/// Locate WhisperType Lite settings path under %APPDATA%\Murmur\settings_lite.json.
 pub fn get_default_settings_path() -> PathBuf {
     if let Ok(appdata) = std::env::var("APPDATA") {
-        PathBuf::from(appdata).join("Murmur").join("settings.json")
+        PathBuf::from(appdata).join("Murmur").join("settings_lite.json")
     } else if let Some(proj_dirs) = directories::ProjectDirs::from("com", "murmur", "Murmur") {
-        proj_dirs.config_dir().join("settings.json")
+        proj_dirs.config_dir().join("settings_lite.json")
     } else {
-        PathBuf::from("settings.json")
+        PathBuf::from("settings_lite.json")
     }
 }
 

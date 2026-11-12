@@ -153,6 +153,23 @@ impl AsrEngine {
             .expect("Failed to spawn ASR model loader thread");
     }
 
+    /// Background loading with Tauri AppHandle: emits "model-status-changed" on start and finish.
+    pub fn spawn_background_load_with_app(&self, app_handle: tauri::AppHandle) {
+        let engine = self.clone();
+        std::thread::Builder::new()
+            .name("murmur-asr-loader".to_string())
+            .spawn(move || {
+                use tauri::Emitter;
+                log::info!("Starting background ASR model load...");
+                let _ = app_handle.emit("model-status-changed", engine.get_status());
+                if let Err(e) = engine.load_model() {
+                    log::error!("Background ASR model load failed: {e}");
+                }
+                let _ = app_handle.emit("model-status-changed", engine.get_status());
+            })
+            .expect("Failed to spawn ASR model loader thread");
+    }
+
     /// Load or reload model with provider fallback chain: CUDA -> DirectML -> CPU int8.
     pub fn load_model(&self) -> Result<(), AsrError> {
         {

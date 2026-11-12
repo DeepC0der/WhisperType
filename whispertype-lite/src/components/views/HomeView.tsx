@@ -53,6 +53,18 @@ export const HomeView: React.FC = () => {
     fetchModelStatus();
   }, [fetchSettings, fetchHistory, fetchAudioDevices, fetchModelStatus]);
 
+  // Polling fallback while model is loading
+  useEffect(() => {
+    const isLoading = Boolean(modelStatus?.is_loading || modelStatus?.status?.status === "loading");
+    if (!isLoading) return;
+
+    const interval = setInterval(() => {
+      fetchModelStatus();
+    }, 600);
+
+    return () => clearInterval(interval);
+  }, [modelStatus?.is_loading, modelStatus?.status?.status, fetchModelStatus]);
+
   // Append new transcripts to the interactive scratchpad
   useEffect(() => {
     const handleTranscript = (transcript: string) => {
@@ -179,14 +191,25 @@ export const HomeView: React.FC = () => {
     const centerDist = Math.abs(i - 8.5) / 8.5;
     const envelope = Math.max(0.2, 1 - centerDist * 0.75);
     if (appState === "RECORDING") {
-      const dynamicBoost = Math.max(18, normalizedMicLevel * 1.15);
-      const waveOffset = Math.sin(i * 0.9 + recordingSeconds * 2.5) * 0.25 + 0.85;
-      return Math.min(100, Math.max(16, Math.round(dynamicBoost * envelope * waveOffset)));
+      if (normalizedMicLevel > 2.0) {
+        const waveOffset = Math.sin(i * 0.9 + recordingSeconds * 2.5) * 0.25 + 0.85;
+        return Math.min(
+          100,
+          Math.round(
+            14 +
+              Math.min(1, Math.sqrt((normalizedMicLevel - 2.0) / 55.0)) *
+                86 *
+                envelope *
+                waveOffset
+          )
+        );
+      }
+      return 14;
     }
     if (appState === "TRANSCRIBING") {
       return Math.round((35 + Math.sin(i * 0.8) * 20) * envelope);
     }
-    return Math.round(18 * envelope + 8);
+    return 14;
   });
 
   const matteThemes = THEMES.filter((t) => t.category === "matte" && t.id !== "system");
@@ -299,7 +322,7 @@ export const HomeView: React.FC = () => {
                 {waveformBars.map((heightPct, idx) => (
                   <span
                     key={idx}
-                    className={`w-1 rounded-full transition-all duration-75 ${
+                    className={`w-1 rounded-full transition-all duration-75 motion-reduce:transition-none ${
                       appState === "RECORDING"
                         ? "bg-red-500"
                         : appState === "TRANSCRIBING"
