@@ -1535,6 +1535,31 @@ button {
   color: var(--primary);
 }
 
+.opt-alt-formats {
+  margin-top: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  font-size: 0.82rem;
+}
+
+.opt-alt-formats a {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color 0.15s;
+}
+
+.opt-alt-formats a:hover {
+  color: var(--primary);
+}
+
+.opt-alt-formats span {
+  color: var(--border);
+  user-select: none;
+}
+
 /* Model Download Card */
 .model-download-box {
   background: linear-gradient(135deg, var(--surface-raised) 0%, var(--surface) 100%);

@@ -13,6 +13,7 @@ models/
 **/.bin/
 
 # Archives and audio files
+release/
 *.tar.bz2
 **/*.tar.bz2
 *.zip
@@ -21,6 +22,7 @@ models/
 **/*.wav
 
 # Environment and editor files
+scripts/gh-run.ps1
 .env
 .env.*
 *.local

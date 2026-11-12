@@ -40,7 +40,12 @@ function initEditionSwitcher() {
       exeTitle: 'WhisperType Lite Installer (.exe)',
       exeMeta: 'Ultra-lightweight NSIS setup (~12 MB). Pure sub-70ms ASR transcription, 2 CPU threads, ~35 MB idle RAM, and Audio & Transcript Review player.',
       exeBtnText: 'Download WhisperType Lite (.exe)',
-      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/latest'
+      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-setup.exe',
+      zipTitle: 'Portable Zero-Install Bundle (.zip)',
+      zipMeta: 'Zero-install archive (~14 MB). Extract anywhere and run immediately with no registry modifications or admin rights.',
+      zipBtnText: 'Download Lite Portable (.zip)',
+      zipUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType.Lite_0.1.0_x64-portable.zip',
+      rawExeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/whispertype-lite.exe'
     },
     standard: {
       tag: 'WHISPERTYPE STANDARD PROFILE • HIGH-SPEC PCS & WORKSTATIONS',
@@ -50,7 +55,12 @@ function initEditionSwitcher() {
       exeTitle: 'WhisperType Standard Installer (.exe)',
       exeMeta: 'Full desktop installer with offline Parakeet ASR + Pro AI Mode (Ctrl+Win / Mouse4, LM Studio loopback) + Audio & Transcript History vault.',
       exeBtnText: 'Download WhisperType Standard (.exe)',
-      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/latest'
+      exeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-setup.exe',
+      zipTitle: 'WhisperType Standard Portable (.zip)',
+      zipMeta: 'Zero-install standalone package (~16 MB). Includes offline Parakeet ASR + Pro AI Mode runtime. Extract and run immediately.',
+      zipBtnText: 'Download Standard Portable (.zip)',
+      zipUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/WhisperType_0.1.0_x64-portable.zip',
+      rawExeUrl: 'https://github.com/DeepC0der/WhisperType/releases/download/v0.1.0/whispertype.exe'
     }
   };
 
@@ -84,6 +94,22 @@ function initEditionSwitcher() {
       const span = dlBtnExe.querySelector('span');
       if (span) span.textContent = cfg.exeBtnText;
       dlBtnExe.href = cfg.exeUrl;
+    }
+
+    // Update Portable ZIP Box dynamically according to selected edition
+    const dlTitleZip = document.getElementById('dlTitleZip');
+    const dlMetaZip = document.getElementById('dlMetaZip');
+    const dlBtnZip = document.getElementById('dlBtnZip');
+    const dlRawExeLink = document.getElementById('dlRawExeLink');
+    if (dlTitleZip) dlTitleZip.textContent = cfg.zipTitle;
+    if (dlMetaZip) dlMetaZip.textContent = cfg.zipMeta;
+    if (dlBtnZip) {
+      dlBtnZip.href = cfg.zipUrl;
+      const span = dlBtnZip.querySelector('span');
+      if (span) span.textContent = cfg.zipBtnText;
+    }
+    if (dlRawExeLink) {
+      dlRawExeLink.href = cfg.rawExeUrl;
     }
     if (lmGuideBox) {
       lmGuideBox.style.borderColor = editionKey === 'standard' ? 'var(--status-refining)' : 'var(--border)';
@@ -622,13 +648,22 @@ function initModals() {
       const manifestText = [
         "# WhisperType v0.1.0 Release SHA-256 Hashes",
         "# Generated for official x64 Windows binary distribution",
+        "# Air-Gapped Verification: 0 outbound connections, 100% local inference",
         "",
-        "SHA-256 (WhisperType_0.1.0_x64-setup.exe) = 8f94e4a938c5b058c4f74d0e8e916a2ef137bcde847f9a46b9a81f3dc25a071d",
-        "SHA-256 (WhisperType_0.1.0_x64_en-US.msi) = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        "SHA-256 (WhisperType-Portable.zip)      = a56c71048b111db4c75f190e4f21db5ec4a02bb40dcf99371e7d825f778a4623",
-        "SHA-256 (sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2) = f9432d6c95357904325a666993cbfb36f784e1b9b1b1178229b9f957eb62c208",
+        "# WhisperType Standard Edition (with Pro AI Mode)",
+        "076dd98885c97360df983417c749b22d456a1a711621d549e3d701adb2c4b9da *WhisperType_0.1.0_x64-setup.exe",
+        "37ec1659a482fda57af219fc08e73a7fb2a0da5d45b18ab2c548848e15e089e5 *WhisperType_0.1.0_x64_en-US.msi",
+        "cef1796c9fa18068f4646aabfa157ef7e40d7ea6964407f7b66ac3aba6a3709d *WhisperType_0.1.0_x64-portable.zip",
+        "58c9511b5719ccae3b860dc1cae35cd6f4b193be408bd50c8c1ac5749c7113dc *whispertype.exe",
         "",
-        "# Air-Gapped Verification: 0 outbound connections, 100% local inference"
+        "# WhisperType Lite Edition (~35 MB Idle • Everyday PCs)",
+        "085143700cad307f19a675124efa4e98c6cc98a9e2e013b24f28e92fa67e4cc9 *WhisperType.Lite_0.1.0_x64-setup.exe",
+        "25a38365642f85f5c2bdbcd26f0065bb38d71401479d80d5c43d449302930d3b *WhisperType.Lite_0.1.0_x64_en-US.msi",
+        "ebdf4bca8d65532a1f37a76886674c3f79e808cb91d625d3d5fd524fbdcf1779 *WhisperType.Lite_0.1.0_x64-portable.zip",
+        "2b6577e28c95b56c6d956be434f99977ac9e1de1dea3dbc3c439922793f8a3e4 *whispertype-lite.exe",
+        "",
+        "# Official Speech Model",
+        "f9432d6c95357904325a666993cbfb36f784e1b9b1b1178229b9f957eb62c208 *sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2"
       ].join("\n");
 
       const blob = new Blob([manifestText], { type: 'text/plain;charset=utf-8' });
